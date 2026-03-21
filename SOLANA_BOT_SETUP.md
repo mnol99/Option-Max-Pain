@@ -29,8 +29,16 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 - **Stop & reverse:** Opposite level break; max 2 stop events per setup
 - **Time exit:** 5 minutes from entry if TP/stop not hit
 
-## Phase 2 (Planned)
+## Phase 2 (Current)
 
-- Jupiter Perps integration
-- Solflare wallet connection
-- Live execution
+- **Solflare wallet** - Connect via wallet adapter (mainnet)
+- **Paper / Live mode** - Toggle when connected
+- **Execution API** - `/api/solana-bot/execute` (scaffold; full Jupiter Perps tx build in progress)
+
+### Live Mode
+
+1. Connect Solflare wallet
+2. Switch to Live mode
+3. On breakout, execution API is called; full Jupiter Perps integration (custody fetch, scaling) is WIP
+4. Shorts require USDC collateral; longs use SOL
+5. Jupiter Perps uses request-fulfillment (keepers execute)

@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { VersionedTransaction } from '@solana/web3.js';
 import { detectPattern, isBreakoutLong, isBreakoutShort } from '@/lib/solana-bot/pattern-engine';
 import {
   createInitialState,
@@ -31,6 +34,8 @@ function formatPrice(n: number): string {
 }
 
 export default function TradePage() {
+  const { publicKey, connected, wallet } = useWallet();
+  const { connection } = useConnection();
   const [state, setState] = useState<TradeState>(createInitialState());
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
@@ -38,7 +43,44 @@ export default function TradePage() {
   const [trades, setTrades] = useState<ClosedTrade[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
+  const [liveMode, setLiveMode] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
   const lastCandleCheck = useRef(0);
+
+  const executeOnBreakout = useCallback(
+    async (side: 'long' | 'short') => {
+      if (!publicKey || !wallet?.adapter) return;
+      setExecError(null);
+      try {
+        const res = await fetch('/api/solana-bot/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            side,
+            owner: publicKey.toString(),
+            sizeUsd: 100,
+          }),
+        });
+        const json = await res.json();
+        if (!json.success) {
+          setExecError(json.error || 'Execution failed');
+          return;
+        }
+        if (json.data?.serializedTx) {
+          const tx = VersionedTransaction.deserialize(
+            Buffer.from(json.data.serializedTx, 'base64')
+          );
+          const sig = await wallet.adapter.sendTransaction(tx, connection, {
+            skipPreflight: false,
+          });
+          await connection.confirmTransaction(sig);
+        }
+      } catch (e) {
+        setExecError(e instanceof Error ? e.message : 'Execution failed');
+      }
+    },
+    [publicKey, wallet, connection]
+  );
 
   const fetchPrice = useCallback(async () => {
     try {
@@ -112,10 +154,12 @@ export default function TradePage() {
       const setup = state.setup;
       if (isBreakoutLong(price, setup)) {
         setState((s) => enterLong(s, price, priceTime));
+        if (liveMode && connected) executeOnBreakout('long');
         return;
       }
       if (isBreakoutShort(price, setup)) {
         setState((s) => enterShort(s, price, priceTime));
+        if (liveMode && connected) executeOnBreakout('short');
         return;
       }
     }
@@ -135,7 +179,7 @@ export default function TradePage() {
     }
 
     // When stopped, we stay stopped until next pattern is detected (from candles)
-  }, [price, priceTime, state]);
+  }, [price, priceTime, state, liveMode, connected, executeOnBreakout]);
 
   const metrics = computeMetrics(trades);
 
@@ -143,15 +187,41 @@ export default function TradePage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <h1 className="text-2xl font-bold text-gray-900">SOL Trading Bot</h1>
-            <nav className="flex gap-4">
-              <a href="/" className="text-sm text-gray-600 hover:text-gray-900">
-                Option Max Pain
-              </a>
-              <span className="text-sm text-gray-400">|</span>
-              <span className="text-sm font-medium text-primary-600">Trade</span>
-            </nav>
+            <div className="flex items-center gap-4">
+              {connected && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">Mode:</span>
+                  <button
+                    type="button"
+                    onClick={() => setLiveMode(false)}
+                    className={`px-3 py-1 rounded text-sm font-medium ${
+                      !liveMode ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    Paper
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLiveMode(true)}
+                    className={`px-3 py-1 rounded text-sm font-medium ${
+                      liveMode ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    Live
+                  </button>
+                </div>
+              )}
+              <WalletMultiButton />
+              <nav className="flex gap-2">
+                <a href="/" className="text-sm text-gray-600 hover:text-gray-900">
+                  Option Max Pain
+                </a>
+                <span className="text-sm text-gray-400">|</span>
+                <span className="text-sm font-medium text-primary-600">Trade</span>
+              </nav>
+            </div>
           </div>
         </div>
       </header>
@@ -174,6 +244,22 @@ export default function TradePage() {
               </a>
               .
             </p>
+          </div>
+        )}
+
+        {liveMode && connected && (
+          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <p className="text-green-800 font-medium">Live trading enabled</p>
+            <p className="text-green-700 text-sm mt-1">
+              Breakouts will trigger Jupiter Perps execution via Solflare. Shorts require USDC collateral.
+              Uses request-fulfillment model (keepers execute).
+            </p>
+          </div>
+        )}
+
+        {execError && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">
+            {execError}
           </div>
         )}
 
@@ -375,8 +461,8 @@ export default function TradePage() {
         </div>
 
         <p className="mt-8 text-center text-sm text-gray-500">
-          Phase 1: Pattern detection + paper trading. Execution (Jupiter Perps + Solflare) coming
-          next.
+          Connect Solflare for Live mode. Paper mode runs simulation only. Jupiter Perps execution
+          via request-fulfillment (keepers).
         </p>
       </main>
     </div>
