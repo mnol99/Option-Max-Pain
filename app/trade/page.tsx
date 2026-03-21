@@ -526,6 +526,9 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade Log</h2>
+              <p className="text-xs text-gray-500 mb-3">
+                Entry: SOL amount @ price · time · Exit: price · time · PnL
+              </p>
               <div className="max-h-80 overflow-y-auto space-y-3">
                 {trades.length === 0 ? (
                   <p className="text-gray-500 text-sm">No closed trades yet</p>
@@ -533,50 +536,52 @@ export default function TradePage() {
                   trades.map((t) => (
                     <div
                       key={t.id}
-                      className="p-3 border border-gray-200 rounded-lg text-sm space-y-2"
+                      className="p-4 border border-gray-200 rounded-lg text-sm space-y-3 bg-gray-50/50"
                     >
-                      <div className="flex justify-between items-center">
+                      <div className="flex justify-between items-center border-b border-gray-200 pb-2">
                         <span
-                          className={`font-medium ${
+                          className={`font-semibold ${
                             t.side === 'long' ? 'text-green-600' : 'text-red-600'
                           }`}
                         >
                           {t.side?.toUpperCase()}
                         </span>
-                        <span className="text-gray-500 text-xs">{t.exitReason}</span>
+                        <span className="text-gray-500 text-xs capitalize">{t.exitReason}</span>
                       </div>
-                      <div className="space-y-1 text-gray-700">
-                        <div>
-                          <span className="text-gray-500">Entry:</span>{' '}
-                          {t.solAmount != null
-                            ? `${t.solAmount.toFixed(4)} SOL`
-                            : '—'}
-                          {' @ $'}
-                          <span className="font-mono">{formatPrice(t.entryPrice)}</span>
+                      <div className="grid gap-2">
+                        <div className="flex flex-wrap gap-x-2">
+                          <span className="text-gray-600 font-medium">Entry:</span>
+                          <span>
+                            {t.solAmount != null
+                              ? `${t.solAmount.toFixed(4)} SOL`
+                              : '—'}
+                            {' @ $'}
+                            <span className="font-mono">{formatPrice(t.entryPrice)}</span>
+                          </span>
                           {t.entryTime != null && (
-                            <>
-                              {' · '}
-                              <span className="text-gray-500 text-xs">{formatTime(t.entryTime)}</span>
-                            </>
+                            <span className="text-gray-500 font-mono text-xs">
+                              {formatTime(t.entryTime)}
+                            </span>
                           )}
                         </div>
-                        <div>
-                          <span className="text-gray-500">Liquidation:</span>{' '}
+                        <div className="flex flex-wrap gap-x-2">
+                          <span className="text-gray-600 font-medium">Exit (liquidation):</span>
                           <span className="font-mono">${formatPrice(t.liquidationPrice ?? t.exitPrice)}</span>
-                          {' · '}
-                          <span className="text-gray-500 text-xs">{formatTime(t.exitTime)}</span>
+                          <span className="text-gray-500 font-mono text-xs">
+                            {formatTime(t.exitTime)}
+                          </span>
                         </div>
-                      </div>
-                      <div
-                        className={`font-mono font-medium pt-1 ${
-                          t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}
-                      >
-                        PnL:{' '}
-                        {t.pnlUsd != null
-                          ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
-                          : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
-                        {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
+                        <div
+                          className={`font-mono font-semibold pt-1 ${
+                            t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                          }`}
+                        >
+                          PnL:{' '}
+                          {t.pnlUsd != null
+                            ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
+                            : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
+                          {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
+                        </div>
                       </div>
                     </div>
                   ))
