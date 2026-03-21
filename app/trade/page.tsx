@@ -48,6 +48,7 @@ export default function TradePage() {
   const [execError, setExecError] = useState<string | null>(null);
   const [paperStartingBalance, setPaperStartingBalance] = useState(1000);
   const [paperPositionSizeUsd, setPaperPositionSizeUsd] = useState(1000);
+  const [liveAmountToRun, setLiveAmountToRun] = useState(1000);
   const [leverage, setLeverage] = useState(1.5);
   const [useChartPrice, setUseChartPrice] = useState(false);
   const lastCandleCheck = useRef(0);
@@ -60,13 +61,13 @@ export default function TradePage() {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            side,
-            owner: publicKey.toString(),
-            sizeUsd: paperPositionSizeUsd,
-            leverage,
-            solPrice: side === 'long' ? solPrice : undefined,
-          }),
+        body: JSON.stringify({
+          side,
+          owner: publicKey.toString(),
+          sizeUsd: liveAmountToRun,
+          leverage,
+          solPrice: side === 'long' ? solPrice : undefined,
+        }),
         });
         const json = await res.json();
         if (!json.success) {
@@ -86,7 +87,7 @@ export default function TradePage() {
         setExecError(e instanceof Error ? e.message : 'Execution failed');
       }
     },
-    [publicKey, wallet, connection, paperPositionSizeUsd, leverage]
+    [publicKey, wallet, connection, liveAmountToRun, leverage]
   );
 
   const fetchPrice = useCallback(async () => {
@@ -187,10 +188,11 @@ export default function TradePage() {
       const { newState, closedTrade } = checkPositionExit(state, price, priceTime);
       setState(newState);
       if (closedTrade) {
+        const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
         const enriched: ClosedTrade = {
           ...closedTrade,
-          pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
-          solAmount: paperPositionSizeUsd / closedTrade.entryPrice,
+          pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+          solAmount: positionSize / closedTrade.entryPrice,
         };
         setTrades((t) => [enriched, ...t]);
       }
@@ -201,10 +203,11 @@ export default function TradePage() {
       const { newState, closedTrade } = checkReversedExit(state, price, priceTime);
       setState(newState);
       if (closedTrade) {
+        const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
         const enriched: ClosedTrade = {
           ...closedTrade,
-          pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
-          solAmount: paperPositionSizeUsd / closedTrade.entryPrice,
+          pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+          solAmount: positionSize / closedTrade.entryPrice,
         };
         setTrades((t) => [enriched, ...t]);
       }
@@ -212,7 +215,7 @@ export default function TradePage() {
     }
 
     // When stopped, we stay stopped until next pattern is detected (from candles)
-  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, leverage]);
+  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, liveAmountToRun, leverage]);
 
   const metrics = computeMetrics(trades);
 
@@ -322,13 +325,32 @@ export default function TradePage() {
           </div>
         </div>
 
-        {liveMode && connected && (
-          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-            <p className="text-green-800 font-medium">Live trading enabled</p>
-            <p className="text-green-700 text-sm mt-1">
-              Breakouts will trigger Jupiter Perps execution via Solflare. Shorts require USDC collateral.
-              Uses request-fulfillment model (keepers execute).
-            </p>
+        {liveMode && (
+          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">
+            {connected && (
+              <div>
+                <p className="text-green-800 font-medium">Live trading enabled</p>
+                <p className="text-green-700 text-sm mt-1">
+                  Breakouts will trigger Jupiter Perps execution via Solflare. Shorts require USDC collateral.
+                  Uses request-fulfillment model (keepers execute).
+                </p>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm text-green-800 font-medium mb-1">
+                Amount to run ($)
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={liveAmountToRun}
+                onChange={(e) => setLiveAmountToRun(Number(e.target.value) || 1000)}
+                className="w-40 px-3 py-2 border border-green-300 rounded text-sm bg-white"
+              />
+              <p className="text-green-700 text-xs mt-1">
+                Dollar amount to use per trade (e.g. $1,000 of your $5,000 balance)
+              </p>
+            </div>
           </div>
         )}
 
