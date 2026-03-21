@@ -4,12 +4,10 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 
 ## Phase 1: Data + Pattern (Current)
 
-1. **Birdeye API Key**
-   - Get a key at [birdeye.so](https://birdeye.so) (or [bds.birdeye.so](https://bds.birdeye.so))
-   - Add to `.env.local`:
-     ```
-     BIRDEYE_API_KEY=your_key_here
-     ```
+1. **Data source: Jupiter Perps (Doves oracle)**
+   - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
+   - No API keys needed for data; uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`)
+   - Candles are built by polling Doves every 15s; first pattern available ~20 min after bot starts
 
 2. **Run the app**
    - `npm run dev`

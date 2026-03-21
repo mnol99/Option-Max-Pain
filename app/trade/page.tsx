@@ -42,7 +42,7 @@ export default function TradePage() {
   const [candles, setCandles] = useState<OHLCVCandle[]>([]);
   const [trades, setTrades] = useState<ClosedTrade[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
+  const [warmupMinutes, setWarmupMinutes] = useState<number>(0);
   const [liveMode, setLiveMode] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
   const [paperStartingBalance, setPaperStartingBalance] = useState(1000);
@@ -111,7 +111,7 @@ export default function TradePage() {
       if (json.success && Array.isArray(json.data)) {
         const newCandles = json.data;
         setCandles(newCandles);
-        setApiConfigured(true);
+        setWarmupMinutes(json.warmupMinutes ?? 0);
         setError(null);
         lastCandleCheck.current = Date.now();
         if (useChartPrice && newCandles.length > 0) {
@@ -119,9 +119,6 @@ export default function TradePage() {
           setPriceTime(Math.floor(Date.now() / 1000));
         }
       } else {
-        if (json.error?.includes('BIRDEYE_API_KEY')) {
-          setApiConfigured(false);
-        }
         setError(json.error || 'Failed to fetch OHLCV');
       }
     } catch (e) {
@@ -155,7 +152,7 @@ export default function TradePage() {
 
   // Price polling - faster when in trade or pattern detected (skip when using chart price)
   useEffect(() => {
-    if (apiConfigured === false || useChartPrice) return;
+    if (useChartPrice) return;
     const ms =
       state.status === 'pattern_detected' || state.status === 'in_position' || state.status === 'reversed'
         ? PRICE_POLL_MS
@@ -163,7 +160,7 @@ export default function TradePage() {
     fetchPrice();
     const id = setInterval(fetchPrice, ms);
     return () => clearInterval(id);
-  }, [apiConfigured, state.status, fetchPrice, useChartPrice]);
+  }, [state.status, fetchPrice, useChartPrice]);
 
   // Process price when we have it
   useEffect(() => {
@@ -258,22 +255,11 @@ export default function TradePage() {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        {apiConfigured === false && (
+        {warmupMinutes > 0 && candles.length < 4 && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-amber-800 font-medium">Birdeye API key required</p>
+            <p className="text-amber-800 font-medium">Building candle data from Jupiter Perps</p>
             <p className="text-amber-700 text-sm mt-1">
-              Add <code className="bg-amber-100 px-1 rounded">BIRDEYE_API_KEY</code> to{' '}
-              <code className="bg-amber-100 px-1 rounded">.env.local</code> and restart the dev server.
-              Get a key at{' '}
-              <a
-                href="https://birdeye.so"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                birdeye.so
-              </a>
-              .
+              Price feed is live. First pattern available in ~{warmupMinutes} min (need 4 completed 5m candles).
             </p>
           </div>
         )}
@@ -347,7 +333,7 @@ export default function TradePage() {
           </div>
         )}
 
-        {error && apiConfigured !== false && (
+        {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
             {error}
           </div>
@@ -376,16 +362,16 @@ export default function TradePage() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">SOL Price (Chart)</span>
+                  <span className="text-gray-600">SOL Price (last candle)</span>
                   <span className="font-mono font-medium">
                     {candles.length > 0 ? `$${formatPrice(candles[0].close)}` : '—'}
                   </span>
                 </div>
                 <p className="text-xs text-gray-500">
-                  Matches Recent Candles — last 5m close
+                  Jupiter Perps — last 5m close
                 </p>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">SOL Price (Live)</span>
+                  <span className="text-gray-600">SOL Price (live)</span>
                   <span className="font-mono font-medium">
                     {price != null ? `$${formatPrice(price)}` : '—'}
                   </span>
@@ -398,7 +384,7 @@ export default function TradePage() {
                     className="rounded"
                   />
                   <span className="text-sm text-gray-600">
-                    Use chart price for breakouts (matches Birdeye)
+                    Use chart price for breakouts (last 5m close)
                   </span>
                 </label>
                 <div className="flex justify-between">
@@ -543,6 +529,7 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Candles</h2>
+              <p className="text-xs text-gray-500 mb-2">Built from Jupiter Perps (Doves oracle) price feed</p>
               <div className="text-sm overflow-x-auto">
                 <table className="w-full">
                   <thead>
