@@ -61,13 +61,19 @@ export interface ClosedTrade {
   id: string;
   side: PositionSide;
   entryPrice: number;
+  /** Entry timestamp (unix seconds) */
+  entryTime: number;
   exitPrice: number;
   exitTime: number;
   exitReason: 'tp' | 'time' | 'stop' | 'reverse';
+  /** Take-profit / liquidation target price */
+  liquidationPrice: number;
   pnl: number;
   pnlPercent: number;
   /** Dollar PnL (paper/live): (pnlPercent/100) * positionSizeUsd */
   pnlUsd?: number;
+  /** SOL notional size (positionSizeUsd / entryPrice) */
+  solAmount?: number;
 }
 
 export interface TradeMetrics {

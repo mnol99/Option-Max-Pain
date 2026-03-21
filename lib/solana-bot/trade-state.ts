@@ -81,8 +81,10 @@ export function checkPositionExit(
   if (state.status !== 'in_position' || !state.setup || !state.entryPrice)
     return { newState: state };
 
-  const { setup, position, entryPrice, windowEnd, stopEventCount } = state;
-  if (!windowEnd) return { newState: state };
+  const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
+  if (!windowEnd || !entryTime) return { newState: state };
+
+  const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
 
   // Time exit
   if (timestamp >= windowEnd) {
@@ -103,9 +105,11 @@ export function checkPositionExit(
         id: `trade-${Date.now()}`,
         side: position,
         entryPrice,
+        entryTime,
         exitPrice: price,
         exitTime: timestamp,
         exitReason: 'time',
+        liquidationPrice,
         pnl,
         pnlPercent,
       },
@@ -131,9 +135,11 @@ export function checkPositionExit(
           id: `trade-${Date.now()}`,
           side: 'long',
           entryPrice,
+          entryTime: state.entryTime!,
           exitPrice: setup.tpLong,
           exitTime: timestamp,
           exitReason: 'tp',
+          liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
         },
@@ -174,9 +180,11 @@ export function checkPositionExit(
           id: `trade-${Date.now()}`,
           side: 'short',
           entryPrice,
+          entryTime: state.entryTime!,
           exitPrice: setup.tpShort,
           exitTime: timestamp,
           exitReason: 'tp',
+          liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
         },
@@ -209,8 +217,10 @@ export function checkReversedExit(
   if (state.status !== 'reversed' || !state.setup || !state.entryPrice)
     return { newState: state };
 
-  const { setup, position, entryPrice, windowEnd, stopEventCount } = state;
-  if (!windowEnd) return { newState: state };
+  const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
+  if (!windowEnd || !entryTime) return { newState: state };
+
+  const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
 
   // Circuit breaker: max 2 stop events
   if (stopEventCount >= 2) {
@@ -246,9 +256,11 @@ export function checkReversedExit(
         id: `trade-${Date.now()}`,
         side: position,
         entryPrice,
+        entryTime,
         exitPrice: price,
         exitTime: timestamp,
         exitReason: 'time',
+        liquidationPrice,
         pnl,
         pnlPercent,
       },
@@ -274,9 +286,11 @@ export function checkReversedExit(
           id: `trade-${Date.now()}`,
           side: 'long',
           entryPrice,
+          entryTime,
           exitPrice: setup.tpLong,
           exitTime: timestamp,
           exitReason: 'tp',
+          liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
         },
@@ -301,9 +315,11 @@ export function checkReversedExit(
           id: `trade-${Date.now()}`,
           side: 'long',
           entryPrice,
+          entryTime,
           exitPrice: setup.stopLong,
           exitTime: timestamp,
           exitReason: 'stop',
+          liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
         },
@@ -330,9 +346,11 @@ export function checkReversedExit(
           id: `trade-${Date.now()}`,
           side: 'short',
           entryPrice,
+          entryTime,
           exitPrice: setup.tpShort,
           exitTime: timestamp,
           exitReason: 'tp',
+          liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
         },
@@ -357,9 +375,11 @@ export function checkReversedExit(
           id: `trade-${Date.now()}`,
           side: 'short',
           entryPrice,
+          entryTime,
           exitPrice: setup.stopShort,
           exitTime: timestamp,
           exitReason: 'stop',
+          liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
         },
@@ -384,7 +404,10 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
   }
   const wins = trades.filter((t) => t.pnl > 0).length;
   const losses = trades.filter((t) => t.pnl <= 0).length;
-  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const totalPnl = trades.reduce(
+    (s, t) => s + (t.pnlUsd != null ? t.pnlUsd : t.pnl),
+    0
+  );
   const returns = trades.map((t) => t.pnlPercent / 100);
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance =

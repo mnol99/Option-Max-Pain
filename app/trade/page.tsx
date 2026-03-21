@@ -190,6 +190,7 @@ export default function TradePage() {
         const enriched: ClosedTrade = {
           ...closedTrade,
           pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
+          solAmount: paperPositionSizeUsd / closedTrade.entryPrice,
         };
         setTrades((t) => [enriched, ...t]);
       }
@@ -203,6 +204,7 @@ export default function TradePage() {
         const enriched: ClosedTrade = {
           ...closedTrade,
           pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
+          solAmount: paperPositionSizeUsd / closedTrade.entryPrice,
         };
         setTrades((t) => [enriched, ...t]);
       }
@@ -493,16 +495,16 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade Log</h2>
-              <div className="max-h-64 overflow-y-auto space-y-2">
+              <div className="max-h-80 overflow-y-auto space-y-3">
                 {trades.length === 0 ? (
                   <p className="text-gray-500 text-sm">No closed trades yet</p>
                 ) : (
                   trades.map((t) => (
                     <div
                       key={t.id}
-                      className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0"
+                      className="p-3 border border-gray-200 rounded-lg text-sm space-y-2"
                     >
-                      <div>
+                      <div className="flex justify-between items-center">
                         <span
                           className={`font-medium ${
                             t.side === 'long' ? 'text-green-600' : 'text-red-600'
@@ -510,20 +512,41 @@ export default function TradePage() {
                         >
                           {t.side?.toUpperCase()}
                         </span>
-                        <span className="text-gray-500 text-sm ml-2">
-                          {t.exitReason} @ ${formatPrice(t.exitPrice)}
-                        </span>
+                        <span className="text-gray-500 text-xs">{t.exitReason}</span>
                       </div>
-                      <span
-                        className={`font-mono ${
+                      <div className="space-y-1 text-gray-700">
+                        <div>
+                          <span className="text-gray-500">Entry:</span>{' '}
+                          {t.solAmount != null
+                            ? `${t.solAmount.toFixed(4)} SOL`
+                            : '—'}
+                          {' @ $'}
+                          <span className="font-mono">{formatPrice(t.entryPrice)}</span>
+                          {t.entryTime != null && (
+                            <>
+                              {' · '}
+                              <span className="text-gray-500 text-xs">{formatTime(t.entryTime)}</span>
+                            </>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Liquidation:</span>{' '}
+                          <span className="font-mono">${formatPrice(t.liquidationPrice ?? t.exitPrice)}</span>
+                          {' · '}
+                          <span className="text-gray-500 text-xs">{formatTime(t.exitTime)}</span>
+                        </div>
+                      </div>
+                      <div
+                        className={`font-mono font-medium pt-1 ${
                           t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                         }`}
                       >
+                        PnL:{' '}
                         {t.pnlUsd != null
                           ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
                           : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
                         {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
-                      </span>
+                      </div>
                     </div>
                   ))
                 )}
