@@ -1,17 +1,19 @@
 /**
  * Jupiter Perps execution API
  * Builds createIncreasePositionMarketRequest transaction for client to sign & send.
- * Status: Scaffold - full integration requires custody fetch, proper scaling.
+ *
+ * Full tx build: Anchor/IDL Borsh encoding ("indeterminate span") needs resolution.
+ * PDA helpers & constants in lib/solana-bot/jupiter-perps.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { PublicKey } from '@solana/web3.js';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { side, owner: ownerStr, sizeUsd = 100 } = body as {
+    const { side, owner: ownerStr } = body as {
       side: 'long' | 'short';
       owner: string;
-      sizeUsd?: number;
     };
 
     if (!ownerStr || !side || !['long', 'short'].includes(side)) {
@@ -21,10 +23,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    try {
+      new PublicKey(ownerStr);
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'Invalid owner: not a valid Solana public key' },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json({
       success: false,
       error:
-        'Jupiter Perps execution is in progress. Requires: USDC collateral for shorts, custody account fetch, proper token scaling. Use Paper mode meanwhile.',
+        'Jupiter Perps tx build: Anchor/IDL encoding in progress. Use Paper mode. ' +
+        'PDA helpers in lib/solana-bot/jupiter-perps.ts.',
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

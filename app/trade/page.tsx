@@ -48,7 +48,7 @@ export default function TradePage() {
   const lastCandleCheck = useRef(0);
 
   const executeOnBreakout = useCallback(
-    async (side: 'long' | 'short') => {
+    async (side: 'long' | 'short', solPrice: number) => {
       if (!publicKey || !wallet?.adapter) return;
       setExecError(null);
       try {
@@ -59,6 +59,7 @@ export default function TradePage() {
             side,
             owner: publicKey.toString(),
             sizeUsd: 100,
+            solPrice: side === 'long' ? solPrice : undefined,
           }),
         });
         const json = await res.json();
@@ -154,12 +155,12 @@ export default function TradePage() {
       const setup = state.setup;
       if (isBreakoutLong(price, setup)) {
         setState((s) => enterLong(s, price, priceTime));
-        if (liveMode && connected) executeOnBreakout('long');
+        if (liveMode && connected) executeOnBreakout('long', price);
         return;
       }
       if (isBreakoutShort(price, setup)) {
         setState((s) => enterShort(s, price, priceTime));
-        if (liveMode && connected) executeOnBreakout('short');
+        if (liveMode && connected) executeOnBreakout('short', price);
         return;
       }
     }
