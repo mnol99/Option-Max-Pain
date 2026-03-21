@@ -1,0 +1,63 @@
+{
+  "version": "0.1.0",
+  "name": "perpetuals",
+  "address": "PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu",
+  "instructions": [
+    {
+      "name": "createIncreasePositionMarketRequest",
+      "accounts": [
+        { "name": "owner", "isMut": true, "isSigner": true },
+        { "name": "fundingAccount", "isMut": true, "isSigner": false },
+        { "name": "perpetuals", "isMut": false, "isSigner": false },
+        { "name": "pool", "isMut": false, "isSigner": false },
+        { "name": "position", "isMut": true, "isSigner": false },
+        { "name": "positionRequest", "isMut": true, "isSigner": false },
+        { "name": "positionRequestAta", "isMut": true, "isSigner": false },
+        { "name": "custody", "isMut": false, "isSigner": false },
+        { "name": "collateralCustody", "isMut": false, "isSigner": false },
+        { "name": "inputMint", "isMut": false, "isSigner": false },
+        { "name": "referral", "isMut": false, "isSigner": false, "isOptional": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "associatedTokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false },
+        { "name": "eventAuthority", "isMut": false, "isSigner": false },
+        { "name": "program", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": "CreateIncreasePositionMarketRequestParams"
+          }
+        }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "Side",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "None" },
+          { "name": "Long" },
+          { "name": "Short" }
+        ]
+      }
+    },
+    {
+      "name": "CreateIncreasePositionMarketRequestParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "sizeUsdDelta", "type": "u64" },
+          { "name": "collateralTokenDelta", "type": "u64" },
+          { "name": "side", "type": { "defined": "Side" } },
+          { "name": "priceSlippage", "type": "u64" },
+          { "name": "jupiterMinimumOut", "type": { "option": "u64" } },
+          { "name": "counter", "type": "u64" }
+        ]
+      }
+    }
+  ]
+}
