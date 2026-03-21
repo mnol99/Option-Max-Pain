@@ -31,6 +31,8 @@ export interface PatternSetup {
   stopLong: number;
   /** Candle period end (e.g. 12:10) */
   periodEnd: number;
+  /** Candle start (unix) - matches first row in Recent Candles */
+  candleUnixTime?: number;
 }
 
 export type PositionSide = 'long' | 'short' | null;
@@ -64,6 +66,8 @@ export interface ClosedTrade {
   exitReason: 'tp' | 'time' | 'stop' | 'reverse';
   pnl: number;
   pnlPercent: number;
+  /** Dollar PnL (paper/live): (pnlPercent/100) * positionSizeUsd */
+  pnlUsd?: number;
 }
 
 export interface TradeMetrics {

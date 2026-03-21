@@ -17,8 +17,10 @@ export async function GET(req: NextRequest) {
     const timeFrom = now - 6 * 300; // 6 * 5min
 
     const candles = await fetchOHLCV(timeFrom, timeTo, apiKey);
+    // Exclude in-progress candle: only use completed 5m candles (period ended)
+    const completed = candles.filter((c) => (c.unixTime || 0) + 300 <= now);
     // Birdeye returns oldest first; we need newest first for pattern logic
-    const sorted = [...candles].sort((a, b) => b.unixTime - a.unixTime);
+    const sorted = [...completed].sort((a, b) => b.unixTime - a.unixTime);
 
     return NextResponse.json({
       success: true,

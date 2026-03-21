@@ -54,6 +54,8 @@ export function detectPattern(candles: OHLCVCandle[]): PatternSetup | null {
     stopShort: current.high + tick,
     stopLong: current.low - tick,
     periodEnd: current.unixTime + 300, // 5 min after candle start
+    /** Candle start (unix) for display - matches first row in Recent Candles */
+    candleUnixTime: current.unixTime,
   };
 }
 

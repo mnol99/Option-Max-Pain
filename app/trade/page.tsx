@@ -45,6 +45,10 @@ export default function TradePage() {
   const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
   const [liveMode, setLiveMode] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
+  const [paperStartingBalance, setPaperStartingBalance] = useState(1000);
+  const [paperPositionSizeUsd, setPaperPositionSizeUsd] = useState(1000);
+  const [leverage, setLeverage] = useState(1.5);
+  const [useChartPrice, setUseChartPrice] = useState(false);
   const lastCandleCheck = useRef(0);
 
   const executeOnBreakout = useCallback(
@@ -58,7 +62,8 @@ export default function TradePage() {
           body: JSON.stringify({
             side,
             owner: publicKey.toString(),
-            sizeUsd: 100,
+            sizeUsd: paperPositionSizeUsd,
+            leverage,
             solPrice: side === 'long' ? solPrice : undefined,
           }),
         });
@@ -80,7 +85,7 @@ export default function TradePage() {
         setExecError(e instanceof Error ? e.message : 'Execution failed');
       }
     },
-    [publicKey, wallet, connection]
+    [publicKey, wallet, connection, paperPositionSizeUsd, leverage]
   );
 
   const fetchPrice = useCallback(async () => {
@@ -104,10 +109,15 @@ export default function TradePage() {
       const res = await fetch('/api/solana-bot/ohlcv');
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        setCandles(json.data);
+        const newCandles = json.data;
+        setCandles(newCandles);
         setApiConfigured(true);
         setError(null);
         lastCandleCheck.current = Date.now();
+        if (useChartPrice && newCandles.length > 0) {
+          setPrice(newCandles[0].close);
+          setPriceTime(Math.floor(Date.now() / 1000));
+        }
       } else {
         if (json.error?.includes('BIRDEYE_API_KEY')) {
           setApiConfigured(false);
@@ -117,14 +127,22 @@ export default function TradePage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'OHLCV fetch failed');
     }
-  }, []);
+  }, [useChartPrice]);
 
   // Initial load and OHLCV polling
   useEffect(() => {
     fetchOHLCV();
     const ohlcvInterval = setInterval(fetchOHLCV, OHLCV_POLL_MS);
     return () => clearInterval(ohlcvInterval);
-  }, [fetchOHLCV]);
+  }, [fetchOHLCV, useChartPrice]);
+
+  // When switching to chart price, use latest candle close immediately
+  useEffect(() => {
+    if (useChartPrice && candles.length > 0) {
+      setPrice(candles[0].close);
+      setPriceTime(Math.floor(Date.now() / 1000));
+    }
+  }, [useChartPrice, candles]);
 
   // Pattern detection when candles update
   useEffect(() => {
@@ -135,9 +153,9 @@ export default function TradePage() {
     }
   }, [candles]);
 
-  // Price polling - faster when in trade or pattern detected
+  // Price polling - faster when in trade or pattern detected (skip when using chart price)
   useEffect(() => {
-    if (apiConfigured === false) return;
+    if (apiConfigured === false || useChartPrice) return;
     const ms =
       state.status === 'pattern_detected' || state.status === 'in_position' || state.status === 'reversed'
         ? PRICE_POLL_MS
@@ -145,7 +163,7 @@ export default function TradePage() {
     fetchPrice();
     const id = setInterval(fetchPrice, ms);
     return () => clearInterval(id);
-  }, [apiConfigured, state.status, fetchPrice]);
+  }, [apiConfigured, state.status, fetchPrice, useChartPrice]);
 
   // Process price when we have it
   useEffect(() => {
@@ -168,19 +186,31 @@ export default function TradePage() {
     if (state.status === 'in_position') {
       const { newState, closedTrade } = checkPositionExit(state, price, priceTime);
       setState(newState);
-      if (closedTrade) setTrades((t) => [closedTrade, ...t]);
+      if (closedTrade) {
+        const enriched: ClosedTrade = {
+          ...closedTrade,
+          pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
+        };
+        setTrades((t) => [enriched, ...t]);
+      }
       return;
     }
 
     if (state.status === 'reversed') {
       const { newState, closedTrade } = checkReversedExit(state, price, priceTime);
       setState(newState);
-      if (closedTrade) setTrades((t) => [closedTrade, ...t]);
+      if (closedTrade) {
+        const enriched: ClosedTrade = {
+          ...closedTrade,
+          pnlUsd: (closedTrade.pnlPercent / 100) * paperPositionSizeUsd,
+        };
+        setTrades((t) => [enriched, ...t]);
+      }
       return;
     }
 
     // When stopped, we stay stopped until next pattern is detected (from candles)
-  }, [price, priceTime, state, liveMode, connected, executeOnBreakout]);
+  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, leverage]);
 
   const metrics = computeMetrics(trades);
 
@@ -248,6 +278,59 @@ export default function TradePage() {
           </div>
         )}
 
+        <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+          <p className="text-slate-800 font-medium mb-3">
+            {liveMode ? 'Live Trading' : 'Paper Trading'} Settings
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            {!liveMode && (
+              <>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Starting Balance ($)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={paperStartingBalance}
+                    onChange={(e) => setPaperStartingBalance(Number(e.target.value) || 1000)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <div>
+                    <span className="text-sm text-slate-600">Current Balance: </span>
+                    <span className="font-semibold text-slate-900">
+                      ${(paperStartingBalance + metrics.totalPnl).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+            <div>
+              <label className="block text-sm text-slate-600 mb-1">Position Size ($)</label>
+              <input
+                type="number"
+                min={1}
+                value={paperPositionSizeUsd}
+                onChange={(e) => setPaperPositionSizeUsd(Number(e.target.value) || 1000)}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-600 mb-1">Leverage</label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                step={0.1}
+                value={leverage}
+                onChange={(e) => setLeverage(Number(e.target.value) || 1.5)}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+              />
+              <p className="text-xs text-slate-500 mt-1">Used for live trades (e.g. 1.5x)</p>
+            </div>
+          </div>
+        </div>
+
         {liveMode && connected && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <p className="text-green-800 font-medium">Live trading enabled</p>
@@ -293,11 +376,31 @@ export default function TradePage() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">SOL Price</span>
+                  <span className="text-gray-600">SOL Price (Chart)</span>
+                  <span className="font-mono font-medium">
+                    {candles.length > 0 ? `$${formatPrice(candles[0].close)}` : '—'}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Matches Recent Candles — last 5m close
+                </p>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">SOL Price (Live)</span>
                   <span className="font-mono font-medium">
                     {price != null ? `$${formatPrice(price)}` : '—'}
                   </span>
                 </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useChartPrice}
+                    onChange={(e) => setUseChartPrice(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span className="text-sm text-gray-600">
+                    Use chart price for breakouts (matches Birdeye)
+                  </span>
+                </label>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Position</span>
                   <span className="font-medium">
@@ -328,6 +431,11 @@ export default function TradePage() {
             {state.setup && (
               <section className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Pattern Levels</h2>
+                {state.setup.candleUnixTime != null && (
+                  <p className="text-xs text-gray-500 mb-2">
+                    From candle {formatTime(state.setup.candleUnixTime)} (first row in Recent Candles)
+                  </p>
+                )}
                 <div className="space-y-2 font-mono text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Breakout High (Long)</span>
@@ -422,8 +530,10 @@ export default function TradePage() {
                           t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                         }`}
                       >
-                        {t.pnl >= 0 ? '+' : ''}${formatPrice(t.pnl)} ({t.pnlPercent >= 0 ? '+' : ''}
-                        {t.pnlPercent.toFixed(2)}%)
+                        {t.pnlUsd != null
+                          ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
+                          : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
+                        {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
                       </span>
                     </div>
                   ))
