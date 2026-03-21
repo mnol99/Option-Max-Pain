@@ -36,6 +36,7 @@ function formatPrice(n: number): string {
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
+  const [mounted, setMounted] = useState(false);
   const [state, setState] = useState<TradeState>(createInitialState());
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
@@ -125,6 +126,8 @@ export default function TradePage() {
       setError(e instanceof Error ? e.message : 'OHLCV fetch failed');
     }
   }, [useChartPrice]);
+
+  useEffect(() => setMounted(true), []);
 
   // Initial load and OHLCV polling
   useEffect(() => {
@@ -241,7 +244,7 @@ export default function TradePage() {
                   </button>
                 </div>
               )}
-              <WalletMultiButton />
+              {mounted && <WalletMultiButton />}
               <nav className="flex gap-2">
                 <a href="/" className="text-sm text-gray-600 hover:text-gray-900">
                   Option Max Pain
