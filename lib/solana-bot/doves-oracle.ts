@@ -25,7 +25,7 @@ function getConnection(): Connection {
  */
 export async function fetchDovesPrice(): Promise<{ price: number; timestamp: number }> {
   const connection = getConnection();
-  const accountInfo = await connection.getAccountInfo(SOL_PRICE_FEED);
+  const accountInfo = await connection.getAccountInfo(SOL_PRICE_FEED, 'processed');
   if (!accountInfo?.data || accountInfo.data.length < TIMESTAMP_OFFSET + 8) {
     throw new Error('Doves oracle: invalid or missing SOL price feed account');
   }

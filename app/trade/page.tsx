@@ -406,6 +406,9 @@ export default function TradePage() {
                     {price != null ? `$${formatPrice(price)}` : '—'}
                   </span>
                 </div>
+                <p className="text-xs text-gray-500">
+                  From Pyth (matches CoinGecko, Birdeye)
+                </p>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
