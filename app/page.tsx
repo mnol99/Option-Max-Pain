@@ -214,6 +214,9 @@ export default function Home() {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-gray-900">Option Max Pain</h1>
             <div className="flex items-center gap-4">
+              <a href="/trade" className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+                SOL Trading Bot
+              </a>
               <a
                 href="https://optionmaxpain.com"
                 className="text-sm text-gray-600 hover:text-gray-900"

@@ -41,8 +41,9 @@ export async function GET(
     
     // Fallback to mock data on any error
     try {
+      const { ticker: tickerParam } = await params;
       const { fetchOptionsChain } = await import('@/lib/options-api');
-      const mockData = await fetchOptionsChain(ticker);
+      const mockData = await fetchOptionsChain(normalizeTicker(tickerParam));
       
       // If it's an auth error, provide helpful guidance (but only show once)
       if (isAuthError) {

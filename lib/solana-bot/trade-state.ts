@@ -1,0 +1,405 @@
+/**
+ * Trade state machine and PnL tracking
+ * Manages pattern -> breakout -> position -> exit flow
+ */
+
+import type {
+  PatternSetup,
+  TradeState,
+  TradeStatus,
+  PositionSide,
+  ClosedTrade,
+  TradeMetrics,
+} from './types';
+import { isBreakoutLong, isBreakoutShort } from './pattern-engine';
+
+const TICK = 0.01;
+
+export function createInitialState(): TradeState {
+  return {
+    status: 'idle',
+    position: null,
+    setup: null,
+    entryPrice: null,
+    entryTime: null,
+    windowEnd: null,
+    stopEventCount: 0,
+  };
+}
+
+export function createPatternDetectedState(setup: PatternSetup): TradeState {
+  return {
+    status: 'pattern_detected',
+    position: null,
+    setup,
+    entryPrice: null,
+    entryTime: null,
+    windowEnd: null,
+    stopEventCount: 0,
+  };
+}
+
+export function enterLong(
+  state: TradeState,
+  price: number,
+  timestamp: number
+): TradeState {
+  if (!state.setup || state.status !== 'pattern_detected') return state;
+  return {
+    ...state,
+    status: 'in_position',
+    position: 'long',
+    entryPrice: price,
+    entryTime: timestamp,
+    windowEnd: timestamp + 300, // 5 min
+    stopEventCount: 0,
+  };
+}
+
+export function enterShort(
+  state: TradeState,
+  price: number,
+  timestamp: number
+): TradeState {
+  if (!state.setup || state.status !== 'pattern_detected') return state;
+  return {
+    ...state,
+    status: 'in_position',
+    position: 'short',
+    entryPrice: price,
+    entryTime: timestamp,
+    windowEnd: timestamp + 300,
+    stopEventCount: 0,
+  };
+}
+
+export function checkPositionExit(
+  state: TradeState,
+  price: number,
+  timestamp: number
+): { newState: TradeState; closedTrade?: ClosedTrade } {
+  if (state.status !== 'in_position' || !state.setup || !state.entryPrice)
+    return { newState: state };
+
+  const { setup, position, entryPrice, windowEnd, stopEventCount } = state;
+  if (!windowEnd) return { newState: state };
+
+  // Time exit
+  if (timestamp >= windowEnd) {
+    const pnl =
+      position === 'long' ? price - entryPrice : entryPrice - price;
+    const pnlPercent = (pnl / entryPrice) * 100;
+    return {
+      newState: {
+        ...state,
+        status: 'idle',
+        position: null,
+        setup: null,
+        entryPrice: null,
+        entryTime: null,
+        windowEnd: null,
+      },
+      closedTrade: {
+        id: `trade-${Date.now()}`,
+        side: position,
+        entryPrice,
+        exitPrice: price,
+        exitTime: timestamp,
+        exitReason: 'time',
+        pnl,
+        pnlPercent,
+      },
+    };
+  }
+
+  if (position === 'long') {
+    // TP hit
+    if (price >= setup.tpLong) {
+      const pnl = setup.tpLong - entryPrice;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'idle',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'long',
+          entryPrice,
+          exitPrice: setup.tpLong,
+          exitTime: timestamp,
+          exitReason: 'tp',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+    // Stop and reverse: break below low
+    if (price < setup.breakoutLow) {
+      return {
+        newState: {
+          ...state,
+          status: 'reversed',
+          position: 'short',
+          entryPrice: price,
+          entryTime: timestamp,
+          windowEnd: timestamp + 300,
+          stopEventCount: stopEventCount + 1,
+        },
+      };
+    }
+  }
+
+  if (position === 'short') {
+    // TP hit
+    if (price <= setup.tpShort) {
+      const pnl = entryPrice - setup.tpShort;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'idle',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'short',
+          entryPrice,
+          exitPrice: setup.tpShort,
+          exitTime: timestamp,
+          exitReason: 'tp',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+    // Stop and reverse: break above high
+    if (price > setup.breakoutHigh) {
+      return {
+        newState: {
+          ...state,
+          status: 'reversed',
+          position: 'long',
+          entryPrice: price,
+          entryTime: timestamp,
+          windowEnd: timestamp + 300,
+          stopEventCount: stopEventCount + 1,
+        },
+      };
+    }
+  }
+
+  return { newState: state };
+}
+
+export function checkReversedExit(
+  state: TradeState,
+  price: number,
+  timestamp: number
+): { newState: TradeState; closedTrade?: ClosedTrade } {
+  if (state.status !== 'reversed' || !state.setup || !state.entryPrice)
+    return { newState: state };
+
+  const { setup, position, entryPrice, windowEnd, stopEventCount } = state;
+  if (!windowEnd) return { newState: state };
+
+  // Circuit breaker: max 2 stop events
+  if (stopEventCount >= 2) {
+    return {
+      newState: {
+        ...state,
+        status: 'stopped',
+        position: null,
+        setup: null,
+        entryPrice: null,
+        entryTime: null,
+        windowEnd: null,
+      },
+    };
+  }
+
+  // Time exit for reversed position
+  if (timestamp >= windowEnd) {
+    const pnl =
+      position === 'long' ? price - entryPrice : entryPrice - price;
+    const pnlPercent = (pnl / entryPrice) * 100;
+    return {
+      newState: {
+        ...state,
+        status: 'idle',
+        position: null,
+        setup: null,
+        entryPrice: null,
+        entryTime: null,
+        windowEnd: null,
+      },
+      closedTrade: {
+        id: `trade-${Date.now()}`,
+        side: position,
+        entryPrice,
+        exitPrice: price,
+        exitTime: timestamp,
+        exitReason: 'time',
+        pnl,
+        pnlPercent,
+      },
+    };
+  }
+
+  if (position === 'long') {
+    // TP
+    if (price >= setup.tpLong) {
+      const pnl = setup.tpLong - entryPrice;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'idle',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'long',
+          entryPrice,
+          exitPrice: setup.tpLong,
+          exitTime: timestamp,
+          exitReason: 'tp',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+    // Stop out (sell stop at setup.stopLong)
+    if (price <= setup.stopLong) {
+      const pnl = setup.stopLong - entryPrice;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'stopped',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+          stopEventCount: stopEventCount + 1,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'long',
+          entryPrice,
+          exitPrice: setup.stopLong,
+          exitTime: timestamp,
+          exitReason: 'stop',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+  }
+
+  if (position === 'short') {
+    // TP
+    if (price <= setup.tpShort) {
+      const pnl = entryPrice - setup.tpShort;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'idle',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'short',
+          entryPrice,
+          exitPrice: setup.tpShort,
+          exitTime: timestamp,
+          exitReason: 'tp',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+    // Stop out (buy stop at setup.stopShort)
+    if (price >= setup.stopShort) {
+      const pnl = entryPrice - setup.stopShort;
+      const pnlPercent = (pnl / entryPrice) * 100;
+      return {
+        newState: {
+          ...state,
+          status: 'stopped',
+          position: null,
+          setup: null,
+          entryPrice: null,
+          entryTime: null,
+          windowEnd: null,
+          stopEventCount: stopEventCount + 1,
+        },
+        closedTrade: {
+          id: `trade-${Date.now()}`,
+          side: 'short',
+          entryPrice,
+          exitPrice: setup.stopShort,
+          exitTime: timestamp,
+          exitReason: 'stop',
+          pnl,
+          pnlPercent,
+        },
+      };
+    }
+  }
+
+  return { newState: state };
+}
+
+export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
+  const total = trades.length;
+  if (total === 0) {
+    return {
+      totalTrades: 0,
+      wins: 0,
+      losses: 0,
+      totalPnl: 0,
+      winRate: 0,
+      sharpeRatio: 0,
+    };
+  }
+  const wins = trades.filter((t) => t.pnl > 0).length;
+  const losses = trades.filter((t) => t.pnl <= 0).length;
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const returns = trades.map((t) => t.pnlPercent / 100);
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance =
+    returns.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / returns.length;
+  const std = Math.sqrt(variance) || 1e-10;
+  // Annualized: ~288 5m periods per day, 252 trading days
+  const periodsPerYear = 288 * 252;
+  const sharpeRatio = (mean / std) * Math.sqrt(periodsPerYear);
+
+  return {
+    totalTrades: total,
+    wins,
+    losses,
+    totalPnl,
+    winRate: total > 0 ? (wins / total) * 100 : 0,
+    sharpeRatio: std > 0 ? sharpeRatio : 0,
+  };
+}
