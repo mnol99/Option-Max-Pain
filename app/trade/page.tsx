@@ -44,6 +44,7 @@ export default function TradePage() {
   const { connection } = useConnection();
   const [mounted, setMounted] = useState(false);
   const [auditExpanded, setAuditExpanded] = useState<Set<string>>(new Set());
+  const [breakoutConfirmCount, setBreakoutConfirmCount] = useState<{ long: number; short: number }>({ long: 0, short: 0 });
   const [state, setState] = useState<TradeState>(createInitialState());
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
@@ -59,6 +60,7 @@ export default function TradePage() {
   const [leverage, setLeverage] = useState(1.5);
   const [useChartPrice, setUseChartPrice] = useState(false);
   const lastCandleCheck = useRef(0);
+  const enteringRef = useRef(false);
 
   const executeOnBreakout = useCallback(
     async (side: 'long' | 'short', solPrice: number) => {
@@ -159,7 +161,10 @@ export default function TradePage() {
     if (state.status !== 'idle' && state.status !== 'stopped' && state.status !== 'pattern_detected') return;
     const setup = detectPattern(candles);
     if (setup) {
+      const isDoubleInside = state.status === 'pattern_detected' && state.setup
+        && state.setup.candleUnixTime !== setup.candleUnixTime;
       setState(createPatternDetectedState(setup));
+      if (isDoubleInside) setBreakoutConfirmCount({ long: 0, short: 0 });
     }
   }, [candles]);
 
@@ -179,18 +184,41 @@ export default function TradePage() {
   useEffect(() => {
     if (price == null || priceTime == null) return;
 
-    if (state.status === 'pattern_detected' && state.setup) {
+    if (state.status === 'pattern_detected' && state.setup && !enteringRef.current) {
       const setup = state.setup;
-      if (isBreakoutLong(price, setup)) {
-        setState((s) => enterLong(s, price, priceTime));
-        if (liveMode && connected) executeOnBreakout('long', price);
+      const longBreakout = isBreakoutLong(price, setup);
+      const shortBreakout = isBreakoutShort(price, setup);
+
+      // Require 2 consecutive polls beyond level to avoid false entries from single ticks
+      if (longBreakout) {
+        const prevLong = breakoutConfirmCount.long;
+        setBreakoutConfirmCount((c) => ({ ...c, long: c.long + 1, short: 0 }));
+        if (prevLong >= 1) {
+          enteringRef.current = true;
+          setBreakoutConfirmCount({ long: 0, short: 0 });
+          setState((s) => enterLong(s, price, priceTime));
+          if (liveMode && connected) executeOnBreakout('long', price);
+        }
         return;
       }
-      if (isBreakoutShort(price, setup)) {
-        setState((s) => enterShort(s, price, priceTime));
-        if (liveMode && connected) executeOnBreakout('short', price);
+      if (shortBreakout) {
+        const prevShort = breakoutConfirmCount.short;
+        setBreakoutConfirmCount((c) => ({ ...c, short: c.short + 1, long: 0 }));
+        if (prevShort >= 1) {
+          enteringRef.current = true;
+          setBreakoutConfirmCount({ long: 0, short: 0 });
+          setState((s) => enterShort(s, price, priceTime));
+          if (liveMode && connected) executeOnBreakout('short', price);
+        }
         return;
       }
+      // Price not beyond level - reset confirmation
+      setBreakoutConfirmCount({ long: 0, short: 0 });
+    }
+
+    // Clear entering guard when we exit to idle/stopped
+    if ((state.status === 'idle' || state.status === 'stopped') && enteringRef.current) {
+      enteringRef.current = false;
     }
 
     if (state.status === 'in_position') {
@@ -224,7 +252,7 @@ export default function TradePage() {
     }
 
     // When stopped, we stay stopped until next pattern is detected (from candles)
-  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, liveAmountToRun, leverage]);
+  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, liveAmountToRun, leverage, breakoutConfirmCount]);
 
   const metrics = computeMetrics(trades);
 
