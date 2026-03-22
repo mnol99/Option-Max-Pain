@@ -85,6 +85,14 @@ export function checkPositionExit(
   if (!windowEnd || !entryTime) return { newState: state };
 
   const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
+  const auditSetup = {
+    breakoutHigh: setup.breakoutHigh,
+    breakoutLow: setup.breakoutLow,
+    range: setup.range,
+    tpLong: setup.tpLong,
+    tpShort: setup.tpShort,
+    candleUnixTime: setup.candleUnixTime,
+  };
 
   // Time exit
   if (timestamp >= windowEnd) {
@@ -142,6 +150,7 @@ export function checkPositionExit(
           liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }
@@ -187,6 +196,7 @@ export function checkPositionExit(
           liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }
@@ -221,6 +231,14 @@ export function checkReversedExit(
   if (!windowEnd || !entryTime) return { newState: state };
 
   const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
+  const auditSetup = {
+    breakoutHigh: setup.breakoutHigh,
+    breakoutLow: setup.breakoutLow,
+    range: setup.range,
+    tpLong: setup.tpLong,
+    tpShort: setup.tpShort,
+    candleUnixTime: setup.candleUnixTime,
+  };
 
   // Circuit breaker: max 2 stop events
   if (stopEventCount >= 2) {
@@ -263,6 +281,7 @@ export function checkReversedExit(
         liquidationPrice,
         pnl,
         pnlPercent,
+        setup: auditSetup,
       },
     };
   }
@@ -293,6 +312,7 @@ export function checkReversedExit(
           liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }
@@ -322,6 +342,7 @@ export function checkReversedExit(
           liquidationPrice: setup.tpLong,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }
@@ -353,6 +374,7 @@ export function checkReversedExit(
           liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }
@@ -382,6 +404,7 @@ export function checkReversedExit(
           liquidationPrice: setup.tpShort,
           pnl,
           pnlPercent,
+          setup: auditSetup,
         },
       };
     }

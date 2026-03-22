@@ -74,6 +74,11 @@ export interface ClosedTrade {
   pnlUsd?: number;
   /** SOL notional size (positionSizeUsd / entryPrice) */
   solAmount?: number;
+  /** Pattern setup for audit (breakout levels, TP targets) */
+  setup?: Pick<
+    PatternSetup,
+    'breakoutHigh' | 'breakoutLow' | 'range' | 'tpLong' | 'tpShort' | 'candleUnixTime'
+  >;
 }
 
 export interface TradeMetrics {

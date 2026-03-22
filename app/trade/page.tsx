@@ -43,6 +43,7 @@ export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
   const [mounted, setMounted] = useState(false);
+  const [auditExpanded, setAuditExpanded] = useState<Set<string>>(new Set());
   const [state, setState] = useState<TradeState>(createInitialState());
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
@@ -582,6 +583,68 @@ export default function TradePage() {
                             : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
                           {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
                         </div>
+                        {t.setup && (
+                          <div className="pt-2 border-t border-gray-200">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAuditExpanded((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(t.id)) next.delete(t.id);
+                                  else next.add(t.id);
+                                  return next;
+                                })
+                              }
+                              className="text-xs text-primary-600 hover:underline font-medium"
+                            >
+                              {auditExpanded.has(t.id) ? 'Hide Audit' : 'Trade Audit'}
+                            </button>
+                            {auditExpanded.has(t.id) && (
+                              <div className="mt-2 p-3 bg-white rounded border border-gray-200 text-xs space-y-2">
+                                <p className="font-semibold text-gray-700">Pattern & Breakout</p>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono">
+                                  <span>Breakout High (long trigger):</span>
+                                  <span>${formatPrice(t.setup.breakoutHigh)}</span>
+                                  <span>Breakout Low (short trigger):</span>
+                                  <span>${formatPrice(t.setup.breakoutLow)}</span>
+                                  <span>Range:</span>
+                                  <span>${formatPrice(t.setup.range)}</span>
+                                  <span>TP Long:</span>
+                                  <span className="text-green-600">${formatPrice(t.setup.tpLong)}</span>
+                                  <span>TP Short:</span>
+                                  <span className="text-red-600">${formatPrice(t.setup.tpShort)}</span>
+                                </div>
+                                <p className="font-semibold text-gray-700 mt-2">Trigger Check</p>
+                                {t.side === 'long' ? (
+                                  <p>
+                                    Long triggers when price &gt; ${formatPrice(t.setup.breakoutHigh)}.
+                                    Entry ${formatPrice(t.entryPrice)} —{' '}
+                                    {t.entryPrice > t.setup.breakoutHigh ? (
+                                      <span className="text-green-600">OK (above breakout)</span>
+                                    ) : (
+                                      <span className="text-amber-600">Check: entry not above breakout high</span>
+                                    )}
+                                  </p>
+                                ) : (
+                                  <p>
+                                    Short triggers when price &lt; ${formatPrice(t.setup.breakoutLow)}.
+                                    Entry ${formatPrice(t.entryPrice)} —{' '}
+                                    {t.entryPrice < t.setup.breakoutLow ? (
+                                      <span className="text-green-600">OK (below breakout)</span>
+                                    ) : (
+                                      <span className="text-amber-600">Possible false signal: entry not below breakout low</span>
+                                    )}
+                                  </p>
+                                )}
+                                <p className="font-semibold text-gray-700 mt-2">Exit</p>
+                                <p>
+                                  Exited at ${formatPrice(t.exitPrice)} ({t.exitReason}).
+                                  {t.exitReason === 'time' && ' Time exit = market price at 5-min mark.'}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))
