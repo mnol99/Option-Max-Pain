@@ -189,11 +189,11 @@ export default function TradePage() {
       const longBreakout = isBreakoutLong(price, setup);
       const shortBreakout = isBreakoutShort(price, setup);
 
-      // Require 2 consecutive polls beyond level to avoid false entries from single ticks
+      // Require 1 confirmed poll beyond level (faster entry, closer to breakout level)
       if (longBreakout) {
         const prevLong = breakoutConfirmCount.long;
         setBreakoutConfirmCount((c) => ({ ...c, long: c.long + 1, short: 0 }));
-        if (prevLong >= 1) {
+        if (prevLong >= 0) {
           enteringRef.current = true;
           setBreakoutConfirmCount({ long: 0, short: 0 });
           setState((s) => enterLong(s, price, priceTime));
@@ -204,7 +204,7 @@ export default function TradePage() {
       if (shortBreakout) {
         const prevShort = breakoutConfirmCount.short;
         setBreakoutConfirmCount((c) => ({ ...c, short: c.short + 1, long: 0 }));
-        if (prevShort >= 1) {
+        if (prevShort >= 0) {
           enteringRef.current = true;
           setBreakoutConfirmCount({ long: 0, short: 0 });
           setState((s) => enterShort(s, price, priceTime));
@@ -445,7 +445,7 @@ export default function TradePage() {
                   </span>
                 </div>
                 <p className="text-xs text-gray-500">
-                  From Pyth (matches CoinGecko, Birdeye)
+                  Jupiter Perps (Doves) — matches execution
                 </p>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
