@@ -565,8 +565,8 @@ export default function TradePage() {
                           )}
                         </div>
                         <div className="flex flex-wrap gap-x-2">
-                          <span className="text-gray-600 font-medium">Exit (liquidation):</span>
-                          <span className="font-mono">${formatPrice(t.liquidationPrice ?? t.exitPrice)}</span>
+                          <span className="text-gray-600 font-medium">Exit:</span>
+                          <span className="font-mono">${formatPrice(t.exitPrice)}</span>
                           <span className="text-gray-500 font-mono text-xs">
                             {formatTime(t.exitTime)}
                           </span>
