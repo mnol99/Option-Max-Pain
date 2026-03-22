@@ -153,8 +153,10 @@ export default function TradePage() {
   }, [useChartPrice, candles]);
 
   // Pattern detection when candles update
+  // Runs on: idle, stopped (new pattern), and pattern_detected (double inside: update to newest inside bar)
   useEffect(() => {
-    if (candles.length < 4 || state.status !== 'idle' && state.status !== 'stopped') return;
+    if (candles.length < 4) return;
+    if (state.status !== 'idle' && state.status !== 'stopped' && state.status !== 'pattern_detected') return;
     const setup = detectPattern(candles);
     if (setup) {
       setState(createPatternDetectedState(setup));
