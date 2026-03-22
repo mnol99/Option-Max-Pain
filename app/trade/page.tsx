@@ -293,6 +293,10 @@ export default function TradePage() {
                 </a>
                 <span className="text-sm text-gray-400">|</span>
                 <span className="text-sm font-medium text-primary-600">Trade</span>
+                <span className="text-sm text-gray-400">|</span>
+                <a href="/backtest" className="text-sm text-gray-600 hover:text-gray-900">
+                  Backtest
+                </a>
               </nav>
             </div>
           </div>

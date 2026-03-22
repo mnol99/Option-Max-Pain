@@ -43,3 +43,11 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 4. Shorts require USDC collateral; longs use SOL
 5. Jupiter Perps uses request-fulfillment (keepers execute)
 6. **Tx build:** Uses minimal IDL + Anchor 0.29; returns serialized tx for Solflare to sign & send
+
+## Backtest (Optimization)
+
+- **Route:** [/backtest](/backtest)
+- **Requires:** `BIRDEYE_API_KEY` in `.env.local` (historical OHLCV)
+- **Analyzes:** Past 1–24 hours (default 6h) of 5m SOL candles
+- **Metrics:** Patterns detected vs missed, win rate, PnL %, avg slippage (bps), MAE/MFE
+- Use to verify pattern detection coverage and tune parameters
