@@ -108,6 +108,7 @@ export function checkPositionExit(
         entryPrice: null,
         entryTime: null,
         windowEnd: null,
+        lastTradedCandleUnixTime: setup.candleUnixTime,
       },
       closedTrade: {
         id: `trade-${Date.now()}`,
@@ -125,8 +126,8 @@ export function checkPositionExit(
   }
 
   if (position === 'long') {
-    // TP hit
-    if (price >= setup.tpLong) {
+    // TP hit - only exit at TP when it would be profitable (entry < tpLong)
+    if (price >= setup.tpLong && setup.tpLong > entryPrice) {
       const pnl = setup.tpLong - entryPrice;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
@@ -138,6 +139,7 @@ export function checkPositionExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,
@@ -171,8 +173,8 @@ export function checkPositionExit(
   }
 
   if (position === 'short') {
-    // TP hit
-    if (price <= setup.tpShort) {
+    // TP hit - only exit at TP when it would be profitable (entry > tpShort)
+    if (price <= setup.tpShort && setup.tpShort < entryPrice) {
       const pnl = entryPrice - setup.tpShort;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
@@ -184,6 +186,7 @@ export function checkPositionExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,
@@ -269,6 +272,7 @@ export function checkReversedExit(
         entryPrice: null,
         entryTime: null,
         windowEnd: null,
+        lastTradedCandleUnixTime: setup.candleUnixTime,
       },
       closedTrade: {
         id: `trade-${Date.now()}`,
@@ -287,8 +291,8 @@ export function checkReversedExit(
   }
 
   if (position === 'long') {
-    // TP
-    if (price >= setup.tpLong) {
+    // TP - only when profitable
+    if (price >= setup.tpLong && setup.tpLong > entryPrice) {
       const pnl = setup.tpLong - entryPrice;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
@@ -300,6 +304,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,
@@ -330,6 +335,7 @@ export function checkReversedExit(
           entryTime: null,
           windowEnd: null,
           stopEventCount: stopEventCount + 1,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,
@@ -349,8 +355,8 @@ export function checkReversedExit(
   }
 
   if (position === 'short') {
-    // TP
-    if (price <= setup.tpShort) {
+    // TP - only when profitable
+    if (price <= setup.tpShort && setup.tpShort < entryPrice) {
       const pnl = entryPrice - setup.tpShort;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
@@ -362,6 +368,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,
@@ -392,6 +399,7 @@ export function checkReversedExit(
           entryTime: null,
           windowEnd: null,
           stopEventCount: stopEventCount + 1,
+          lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
           id: `trade-${Date.now()}`,

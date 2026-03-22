@@ -22,7 +22,7 @@ import {
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
-const PRICE_POLL_MS = 2000;   // When pattern detected or in position
+const PRICE_POLL_MS = 1000;   // When pattern detected or in position (1s for faster entry)
 const OHLCV_POLL_MS = 60000; // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 
@@ -161,9 +161,13 @@ export default function TradePage() {
     if (state.status !== 'idle' && state.status !== 'stopped' && state.status !== 'pattern_detected') return;
     const setup = detectPattern(candles);
     if (setup) {
+      if (setup.candleUnixTime === state.lastTradedCandleUnixTime) return;
       const isDoubleInside = state.status === 'pattern_detected' && state.setup
         && state.setup.candleUnixTime !== setup.candleUnixTime;
-      setState(createPatternDetectedState(setup));
+      setState((s) => ({
+        ...createPatternDetectedState(setup),
+        lastTradedCandleUnixTime: s.lastTradedCandleUnixTime,
+      }));
       if (isDoubleInside) setBreakoutConfirmCount({ long: 0, short: 0 });
     }
   }, [candles]);

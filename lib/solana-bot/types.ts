@@ -55,6 +55,8 @@ export interface TradeState {
   windowEnd: number | null;
   /** Stop event count (max 2) */
   stopEventCount: number;
+  /** Don't re-enter same pattern (candle we just traded) */
+  lastTradedCandleUnixTime?: number;
 }
 
 export interface ClosedTrade {
