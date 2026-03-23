@@ -61,14 +61,16 @@ export function detectPattern(candles: OHLCVCandle[]): PatternSetup | null {
 
 /**
  * Check if price has broken above high (long trigger)
+ * Uses >= so we enter on the breakout tick, not one tick later
  */
 export function isBreakoutLong(price: number, setup: PatternSetup): boolean {
-  return price > setup.breakoutHigh;
+  return price >= setup.breakoutHigh;
 }
 
 /**
  * Check if price has broken below low (short trigger)
+ * Uses <= so we enter on the breakout tick, not one tick later
  */
 export function isBreakoutShort(price: number, setup: PatternSetup): boolean {
-  return price < setup.breakoutLow;
+  return price <= setup.breakoutLow;
 }

@@ -24,7 +24,7 @@ import {
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
-const PRICE_POLL_MS = 500;   // When pattern detected or in position (500ms for faster entry)
+const PRICE_POLL_MS = 200;   // When pattern detected or in position (200ms for minimal slippage)
 const OHLCV_POLL_MS = 3000; // Check for new candles every 3s (detect pattern at 5m mark)
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 
