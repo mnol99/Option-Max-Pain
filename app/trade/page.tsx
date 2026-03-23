@@ -692,7 +692,10 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Candles</h2>
-              <p className="text-xs text-gray-500 mb-2">Built from Jupiter Perps (Doves oracle) price feed</p>
+              <p className="text-xs text-gray-500 mb-2">
+                Built from Jupiter Perps (Doves oracle), polled every 5s. Jupiter&apos;s chart may use
+                different data/aggregation—small differences possible.
+              </p>
               <div className="text-sm overflow-x-auto">
                 <table className="w-full">
                   <thead>
