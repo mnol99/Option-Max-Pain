@@ -19,6 +19,8 @@ import {
   checkPositionExit,
   checkReversedExit,
   computeMetrics,
+  getEffectiveTpLong,
+  getEffectiveTpShort,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
@@ -511,12 +513,24 @@ export default function TradePage() {
                     <span>${formatPrice(state.setup.range)}</span>
                   </div>
                   <div className="flex justify-between border-t pt-2">
-                    <span className="text-gray-600">TP Long</span>
-                    <span className="text-green-600">${formatPrice(state.setup.tpLong)}</span>
+                    <span className="text-gray-600">TP Long{state.entryPrice ? ' (fee-adj)' : ''}</span>
+                    <span className="text-green-600">$
+                      {formatPrice(
+                        state.entryPrice
+                          ? getEffectiveTpLong(state.entryPrice, state.setup.range)
+                          : state.setup.tpLong
+                      )}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">TP Short</span>
-                    <span className="text-red-600">${formatPrice(state.setup.tpShort)}</span>
+                    <span className="text-gray-600">TP Short{state.entryPrice ? ' (fee-adj)' : ''}</span>
+                    <span className="text-red-600">$
+                      {formatPrice(
+                        state.entryPrice
+                          ? getEffectiveTpShort(state.entryPrice, state.setup.range)
+                          : state.setup.tpShort
+                      )}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Stop Short (reversal)</span>

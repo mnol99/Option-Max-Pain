@@ -14,6 +14,19 @@ import type {
 import { isBreakoutLong, isBreakoutShort } from './pattern-engine';
 
 const TICK = 0.01;
+/** Min TP distance (in price) to cover ~$1.35 fees on $1000 (0.135% of entry) */
+const FEE_MIN_BPS = 13.5;
+
+/** Effective TP = entry ± max(range, fee min). Export for UI display. */
+export function getEffectiveTpLong(entry: number, range: number): number {
+  const feeMin = entry * (FEE_MIN_BPS / 10000);
+  return entry + Math.max(range, feeMin);
+}
+
+export function getEffectiveTpShort(entry: number, range: number): number {
+  const feeMin = entry * (FEE_MIN_BPS / 10000);
+  return entry - Math.max(range, feeMin);
+}
 
 export function createInitialState(): TradeState {
   return {
@@ -84,7 +97,9 @@ export function checkPositionExit(
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
   if (!windowEnd || !entryTime) return { newState: state };
 
-  const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
+  const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
+  const effectiveTpShort = getEffectiveTpShort(entryPrice, setup.range);
+  const liquidationPrice = position === 'long' ? effectiveTpLong : effectiveTpShort;
   const auditSetup = {
     breakoutHigh: setup.breakoutHigh,
     breakoutLow: setup.breakoutLow,
@@ -126,9 +141,9 @@ export function checkPositionExit(
   }
 
   if (position === 'long') {
-    // TP hit - only exit at TP when it would be profitable (entry < tpLong)
-    if (price >= setup.tpLong && setup.tpLong > entryPrice) {
-      const pnl = setup.tpLong - entryPrice;
+    // TP hit - only exit at TP when it would be profitable (entry < effectiveTp)
+    if (price >= effectiveTpLong && effectiveTpLong > entryPrice) {
+      const pnl = effectiveTpLong - entryPrice;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
         newState: {
@@ -146,10 +161,10 @@ export function checkPositionExit(
           side: 'long',
           entryPrice,
           entryTime: state.entryTime!,
-          exitPrice: setup.tpLong,
+          exitPrice: effectiveTpLong,
           exitTime: timestamp,
           exitReason: 'tp',
-          liquidationPrice: setup.tpLong,
+          liquidationPrice: effectiveTpLong,
           pnl,
           pnlPercent,
           setup: auditSetup,
@@ -173,9 +188,9 @@ export function checkPositionExit(
   }
 
   if (position === 'short') {
-    // TP hit - only exit at TP when it would be profitable (entry > tpShort)
-    if (price <= setup.tpShort && setup.tpShort < entryPrice) {
-      const pnl = entryPrice - setup.tpShort;
+    // TP hit - only exit at TP when it would be profitable (entry > effectiveTp)
+    if (price <= effectiveTpShort && effectiveTpShort < entryPrice) {
+      const pnl = entryPrice - effectiveTpShort;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
         newState: {
@@ -193,10 +208,10 @@ export function checkPositionExit(
           side: 'short',
           entryPrice,
           entryTime: state.entryTime!,
-          exitPrice: setup.tpShort,
+          exitPrice: effectiveTpShort,
           exitTime: timestamp,
           exitReason: 'tp',
-          liquidationPrice: setup.tpShort,
+          liquidationPrice: effectiveTpShort,
           pnl,
           pnlPercent,
           setup: auditSetup,
@@ -233,7 +248,9 @@ export function checkReversedExit(
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
   if (!windowEnd || !entryTime) return { newState: state };
 
-  const liquidationPrice = position === 'long' ? setup.tpLong : setup.tpShort;
+  const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
+  const effectiveTpShort = getEffectiveTpShort(entryPrice, setup.range);
+  const liquidationPrice = position === 'long' ? effectiveTpLong : effectiveTpShort;
   const auditSetup = {
     breakoutHigh: setup.breakoutHigh,
     breakoutLow: setup.breakoutLow,
@@ -291,9 +308,9 @@ export function checkReversedExit(
   }
 
   if (position === 'long') {
-    // TP - only when profitable
-    if (price >= setup.tpLong && setup.tpLong > entryPrice) {
-      const pnl = setup.tpLong - entryPrice;
+    // TP - only when profitable (fee-adjusted)
+    if (price >= effectiveTpLong && effectiveTpLong > entryPrice) {
+      const pnl = effectiveTpLong - entryPrice;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
         newState: {
@@ -311,10 +328,10 @@ export function checkReversedExit(
           side: 'long',
           entryPrice,
           entryTime,
-          exitPrice: setup.tpLong,
+          exitPrice: effectiveTpLong,
           exitTime: timestamp,
           exitReason: 'tp',
-          liquidationPrice: setup.tpLong,
+          liquidationPrice: effectiveTpLong,
           pnl,
           pnlPercent,
           setup: auditSetup,
@@ -355,9 +372,9 @@ export function checkReversedExit(
   }
 
   if (position === 'short') {
-    // TP - only when profitable
-    if (price <= setup.tpShort && setup.tpShort < entryPrice) {
-      const pnl = entryPrice - setup.tpShort;
+    // TP - only when profitable (fee-adjusted)
+    if (price <= effectiveTpShort && effectiveTpShort < entryPrice) {
+      const pnl = entryPrice - effectiveTpShort;
       const pnlPercent = (pnl / entryPrice) * 100;
       return {
         newState: {
@@ -375,10 +392,10 @@ export function checkReversedExit(
           side: 'short',
           entryPrice,
           entryTime,
-          exitPrice: setup.tpShort,
+          exitPrice: effectiveTpShort,
           exitTime: timestamp,
           exitReason: 'tp',
-          liquidationPrice: setup.tpShort,
+          liquidationPrice: effectiveTpShort,
           pnl,
           pnlPercent,
           setup: auditSetup,
