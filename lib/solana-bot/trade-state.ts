@@ -136,6 +136,7 @@ export function checkPositionExit(
         liquidationPrice,
         pnl,
         pnlPercent,
+        setup: auditSetup,
       },
     };
   }
