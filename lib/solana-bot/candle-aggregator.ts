@@ -22,7 +22,7 @@ interface CurrentCandle {
 let completedCandles: OHLCVCandle[] = [];
 let currentCandle: CurrentCandle | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
-const POLL_MS = 5000; // Poll Doves every 5s for accurate OHLC (avoids false inside bars from undersampling)
+const POLL_MS = 15000; // Poll Doves every 15s (lower RPC load)
 
 async function tick(): Promise<void> {
   try {

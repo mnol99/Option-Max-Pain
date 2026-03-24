@@ -7,7 +7,7 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 1. **Data source: Jupiter Perps (Doves oracle)**
    - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
    - No API keys needed for data; uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`)
-   - Candles are built by polling Doves every 5s; first pattern available ~20 min after bot starts
+   - Candles are built by polling Doves every 15s; first pattern available ~20 min after bot starts
 
 2. **Run the app**
    - `npm run dev`

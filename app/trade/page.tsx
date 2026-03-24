@@ -24,8 +24,8 @@ import {
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
-const PRICE_POLL_MS = 200;   // When pattern detected or in position (200ms for minimal slippage)
-const OHLCV_POLL_MS = 3000; // Check for new candles every 3s (detect pattern at 5m mark)
+const PRICE_POLL_MS = 1000;   // When pattern detected or in position
+const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 
 function formatTime(ts: number): string {
@@ -90,7 +90,6 @@ export default function TradePage() {
   const [useChartPrice, setUseChartPrice] = useState(false);
   const lastCandleCheck = useRef(0);
   const enteringRef = useRef(false);
-  const last5mBoundary = useRef<number>(0);
 
   const executeOnBreakout = useCallback(
     async (side: 'long' | 'short', solPrice: number) => {
@@ -175,21 +174,6 @@ export default function TradePage() {
     const ohlcvInterval = setInterval(fetchOHLCV, OHLCV_POLL_MS);
     return () => clearInterval(ohlcvInterval);
   }, [fetchOHLCV, useChartPrice]);
-
-  // Immediately fetch OHLCV when 5m boundary crosses (new candle closed)
-  useEffect(() => {
-    const check = () => {
-      const now = Math.floor(Date.now() / 1000);
-      const boundary = Math.floor(now / 300) * 300;
-      if (last5mBoundary.current > 0 && boundary !== last5mBoundary.current) {
-        fetchOHLCV();
-      }
-      last5mBoundary.current = boundary;
-    };
-    check();
-    const id = setInterval(check, 1000);
-    return () => clearInterval(id);
-  }, [fetchOHLCV]);
 
   // When switching to chart price, use latest candle close immediately
   useEffect(() => {
@@ -782,7 +766,7 @@ export default function TradePage() {
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Candles</h2>
               <p className="text-xs text-gray-500 mb-2">
-                Built from Jupiter Perps (Doves oracle), polled every 5s. Jupiter&apos;s chart may use
+                Built from Jupiter Perps (Doves oracle), polled every 15s. Jupiter&apos;s chart may use
                 different data/aggregation—small differences possible.
               </p>
               <div className="text-sm overflow-x-auto">

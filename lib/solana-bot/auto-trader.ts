@@ -18,7 +18,7 @@ import type { TradeState } from './types';
 import { getCandles } from './candle-aggregator';
 import { fetchDovesPrice } from './doves-oracle';
 
-const POLL_MS = 200;
+const POLL_MS = 2000; // 2s - lower RPC load than 200ms
 const ENTRY_DELAY_MS = 5000; // Don't enter in first 5s after pattern (let candle settle)
 
 let running = false;
