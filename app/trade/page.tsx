@@ -41,33 +41,6 @@ function formatPrice(n: number): string {
   return n.toFixed(2);
 }
 
-function AutomatedStatusBanner() {
-  const [data, setData] = useState<{
-    enabled: boolean;
-    running: boolean;
-    status?: string;
-    position?: string;
-    error?: string;
-  } | null>(null);
-  useEffect(() => {
-    fetch('/api/solana-bot/automated')
-      .then((r) => r.json())
-      .then((j) => j.success && setData(j.data))
-      .catch(() => {});
-  }, []);
-  if (!data?.enabled || !data?.running) return null;
-  return (
-    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-      <p className="text-blue-800 font-medium">Automated trading active</p>
-      <p className="text-blue-700 text-sm mt-1">
-        Bot runs server-side. Status: {data.status?.replace('_', ' ')}.
-        {data.position && ` Position: ${data.position.toUpperCase()}.`}
-        {data.error && <span className="text-amber-600"> Error: {data.error}</span>}
-      </p>
-    </div>
-  );
-}
-
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
@@ -399,8 +372,6 @@ export default function TradePage() {
           </div>
         </div>
 
-        <AutomatedStatusBanner />
-
         {liveMode && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">
             {connected && (
@@ -523,36 +494,6 @@ export default function TradePage() {
             {state.setup && (
               <section className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Pattern Levels</h2>
-                {liveMode && connected && state.status === 'pattern_detected' && (
-                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-sm text-blue-800 font-medium mb-2">Place resting limit order (optional)</p>
-                    <p className="text-xs text-blue-700 mb-2">
-                      For faster entry, place a limit order on Jupiter at the breakout level. The bot will also
-                      use market orders when breakout is detected.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <a
-                        href="https://jup.ag/perps/long/USDC-SOL"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700"
-                      >
-                        Long SOL — trigger ${formatPrice(state.setup.breakoutHigh)}
-                      </a>
-                      <a
-                        href="https://jup.ag/perps/short/USDC-SOL"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700"
-                      >
-                        Short SOL — trigger ${formatPrice(state.setup.breakoutLow)}
-                      </a>
-                    </div>
-                    <p className="text-xs text-blue-600 mt-2">
-                      On Jupiter, switch to Limit order and set trigger: Long &gt; {formatPrice(state.setup.breakoutHigh)}, Short &lt; {formatPrice(state.setup.breakoutLow)}.
-                    </p>
-                  </div>
-                )}
                 {state.setup.candleUnixTime != null && (
                   <p className="text-xs text-gray-500 mb-2">
                     From candle {formatTime(state.setup.candleUnixTime)} (first row in Recent Candles)
