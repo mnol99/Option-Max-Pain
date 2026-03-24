@@ -41,6 +41,33 @@ function formatPrice(n: number): string {
   return n.toFixed(2);
 }
 
+function AutomatedStatusBanner() {
+  const [data, setData] = useState<{
+    enabled: boolean;
+    running: boolean;
+    status?: string;
+    position?: string;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    fetch('/api/solana-bot/automated')
+      .then((r) => r.json())
+      .then((j) => j.success && setData(j.data))
+      .catch(() => {});
+  }, []);
+  if (!data?.enabled || !data?.running) return null;
+  return (
+    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+      <p className="text-blue-800 font-medium">Automated trading active</p>
+      <p className="text-blue-700 text-sm mt-1">
+        Bot runs server-side. Status: {data.status?.replace('_', ' ')}.
+        {data.position && ` Position: ${data.position.toUpperCase()}.`}
+        {data.error && <span className="text-amber-600"> Error: {data.error}</span>}
+      </p>
+    </div>
+  );
+}
+
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
@@ -387,6 +414,8 @@ export default function TradePage() {
             </div>
           </div>
         </div>
+
+        <AutomatedStatusBanner />
 
         {liveMode && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">

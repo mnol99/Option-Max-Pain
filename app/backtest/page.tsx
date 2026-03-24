@@ -128,7 +128,7 @@ export default function BacktestPage() {
           </div>
         )}
 
-        {r && !r.error && (
+        {r && r.patternsDetected != null && (
           <div className="space-y-6">
             <section className="bg-white rounded-lg shadow p-6">
               <h2 className="text-lg font-semibold mb-4">Period</h2>

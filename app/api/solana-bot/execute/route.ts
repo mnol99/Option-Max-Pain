@@ -1,10 +1,10 @@
 /**
  * Jupiter Perps execution API
  * Builds createIncreasePositionMarketRequest tx for client to sign & send.
- * Uses minimal IDL (Anchor 0.29) for createIncreasePositionMarketRequest.
+ * When autoSign=true and TRADING_PRIVATE_KEY (base64) is set, signs and sends server-side.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
 import {
   ComputeBudgetProgram,
@@ -48,12 +48,16 @@ export async function POST(req: NextRequest) {
       side,
       owner: ownerStr,
       sizeUsd = 100,
+      leverage = 1.5,
       solPrice,
+      autoSign = false,
     } = body as {
       side: 'long' | 'short';
       owner: string;
       sizeUsd?: number;
+      leverage?: number;
       solPrice?: number;
+      autoSign?: boolean;
     };
 
     if (!ownerStr || !side || !['long', 'short'].includes(side)) {
@@ -64,6 +68,23 @@ export async function POST(req: NextRequest) {
     }
 
     const owner = new PublicKey(ownerStr);
+    const tradingKeyB64 = process.env.TRADING_PRIVATE_KEY;
+    if (autoSign && (!tradingKeyB64 || tradingKeyB64.length < 32)) {
+      return NextResponse.json(
+        { success: false, error: 'autoSign requires TRADING_PRIVATE_KEY (base64) in env' },
+        { status: 400 }
+      );
+    }
+    let signerKeypair: Keypair | null = null;
+    if (autoSign && tradingKeyB64) {
+      signerKeypair = Keypair.fromSecretKey(Buffer.from(tradingKeyB64, 'base64'));
+      if (signerKeypair.publicKey.toString() !== ownerStr) {
+        return NextResponse.json(
+          { success: false, error: 'owner must match TRADING_PRIVATE_KEY when autoSign' },
+          { status: 400 }
+        );
+      }
+    }
     const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
     const connection = new Connection(rpcUrl);
 
@@ -91,7 +112,8 @@ export async function POST(req: NextRequest) {
 
     const perpetuals = getPerpetualsPda();
 
-    const collateralUsd = sizeUsd * 0.15;
+    const leverageNum = Math.max(1, Math.min(100, leverage));
+    const collateralUsd = sizeUsd / leverageNum;
     const sizeUsdDelta = new BN(Math.floor(sizeUsd * USD_SCALE));
 
     let collateralTokenDelta: BN;
@@ -184,12 +206,17 @@ export async function POST(req: NextRequest) {
     }).compileToV0Message();
 
     const tx = new VersionedTransaction(txMessage);
+    if (autoSign && signerKeypair) {
+      tx.sign([signerKeypair]);
+      const sig = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 4,
+      });
+      await connection.confirmTransaction(sig, 'confirmed');
+      return NextResponse.json({ success: true, data: { signature: sig } });
+    }
     const serialized = Buffer.from(tx.serialize()).toString('base64');
-
-    return NextResponse.json({
-      success: true,
-      data: { serializedTx: serialized },
-    });
+    return NextResponse.json({ success: true, data: { serializedTx: serialized } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Execute error:', msg);
