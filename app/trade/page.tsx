@@ -42,6 +42,18 @@ function formatPrice(n: number): string {
   return n.toFixed(2);
 }
 
+/** Human-readable duration from entry to exit (for audit). */
+function formatHoldDuration(entryTime: number, exitTime: number): string {
+  const sec = Math.max(0, exitTime - entryTime);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
+}
+
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
@@ -704,8 +716,31 @@ export default function TradePage() {
                                 <p className="font-semibold text-gray-700 mt-2">Exit</p>
                                 <p>
                                   Exited at ${formatPrice(t.exitPrice)} ({t.exitReason}).
-                                  {t.exitReason === 'time' && ' Time exit = market price at 5-min mark.'}
                                 </p>
+                                {t.exitReason === 'time' && t.entryTime != null && (
+                                  <div className="mt-2 space-y-1 text-gray-600">
+                                    <p>
+                                      Intended management window: 5 minutes after entry (~
+                                      {formatTime(t.entryTime + 300)}). Actual hold:{' '}
+                                      {formatHoldDuration(t.entryTime, t.exitTime)}.
+                                    </p>
+                                    {t.exitTime - t.entryTime > 360 ? (
+                                      <p className="text-amber-800">
+                                        This exit was <strong>delayed</strong>: the simulator only
+                                        closes on a new price tick. If the tab was in the background,
+                                        the PC slept, or the network dropped, ticks can pause for a
+                                        long time—so &quot;time&quot; exit can happen far after the
+                                        5-minute mark, using the price from the first tick that
+                                        finally ran.
+                                      </p>
+                                    ) : (
+                                      <p>
+                                        Exit price is from the live feed at the first poll after the
+                                        window ended.
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
