@@ -17,6 +17,19 @@ const TICK = 0.01;
 /** Min TP distance (in price) to cover ~$1.35 fees on $1000 (0.135% of entry) */
 const FEE_MIN_BPS = 13.5;
 
+/** Jupiter Perps taker fee (approx.); used for performance “total cost” estimate */
+export const JUPITER_PERPS_EST_FEE_BPS_PER_SIDE = 6;
+
+function closedTradeNotionalUsd(t: ClosedTrade): number {
+  if (t.solAmount != null && t.entryPrice > 0) {
+    return t.solAmount * t.entryPrice;
+  }
+  if (t.pnlUsd != null && Math.abs(t.pnlPercent) > 1e-8) {
+    return t.pnlUsd / (t.pnlPercent / 100);
+  }
+  return 0;
+}
+
 /** Effective TP = entry ± max(range, fee min). Export for UI display. */
 export function getEffectiveTpLong(entry: number, range: number): number {
   const feeMin = entry * (FEE_MIN_BPS / 10000);
@@ -449,6 +462,8 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
       totalPnl: 0,
       winRate: 0,
       sharpeRatio: 0,
+      estimatedTotalFeesUsd: 0,
+      feeLegCount: 0,
     };
   }
   const wins = trades.filter((t) => t.pnl > 0).length;
@@ -466,6 +481,14 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
   const periodsPerYear = 288 * 252;
   const sharpeRatio = (mean / std) * Math.sqrt(periodsPerYear);
 
+  const feeRate = JUPITER_PERPS_EST_FEE_BPS_PER_SIDE / 10000;
+  let estimatedTotalFeesUsd = 0;
+  for (const t of trades) {
+    const notional = closedTradeNotionalUsd(t);
+    estimatedTotalFeesUsd += 2 * notional * feeRate;
+  }
+  const feeLegCount = total * 2;
+
   return {
     totalTrades: total,
     wins,
@@ -473,5 +496,7 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
     totalPnl,
     winRate: total > 0 ? (wins / total) * 100 : 0,
     sharpeRatio: std > 0 ? sharpeRatio : 0,
+    estimatedTotalFeesUsd,
+    feeLegCount,
   };
 }

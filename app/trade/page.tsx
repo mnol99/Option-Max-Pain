@@ -21,6 +21,7 @@ import {
   computeMetrics,
   getEffectiveTpLong,
   getEffectiveTpShort,
+  JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
@@ -573,6 +574,18 @@ export default function TradePage() {
                 <div>
                   <p className="text-gray-600 text-sm">Sharpe Ratio</p>
                   <p className="text-xl font-bold">{metrics.sharpeRatio.toFixed(2)}</p>
+                </div>
+                <div className="col-span-2 border-t border-gray-100 pt-3 mt-1">
+                  <p className="text-gray-600 text-sm">Est. total trading costs</p>
+                  <p className="text-xl font-bold text-slate-800">
+                    ${formatPrice(metrics.estimatedTotalFeesUsd)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Running total: {metrics.feeLegCount} fee legs (
+                    {metrics.totalTrades} opens + {metrics.totalTrades} closes) at ~
+                    {JUPITER_PERPS_EST_FEE_BPS_PER_SIDE} bps per side (taker, Jupiter Perps).
+                    Not net PnL—actual fees depend on tier and maker/taker mix.
+                  </p>
                 </div>
               </div>
             </section>

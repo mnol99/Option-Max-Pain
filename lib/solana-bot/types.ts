@@ -91,4 +91,8 @@ export interface TradeMetrics {
   winRate: number;
   /** Annualized Sharpe (assuming ~288 5m periods/day) */
   sharpeRatio: number;
+  /** Sum of estimated per-side fees (open + close) for all closed trades, USD */
+  estimatedTotalFeesUsd: number;
+  /** Fee events counted (2 per closed trade: entry + exit) */
+  feeLegCount: number;
 }
