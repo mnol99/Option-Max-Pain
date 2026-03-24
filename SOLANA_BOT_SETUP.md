@@ -7,7 +7,7 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 1. **Data source: Jupiter Perps (Doves oracle)**
    - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
    - No API keys needed for data; uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`)
-   - Candles are built by polling Doves every 15s; first pattern available ~20 min after bot starts
+   - Candles are built by polling Doves every 5s; first pattern available ~20 min after bot starts
 
 2. **Run the app**
    - `npm run dev`
@@ -39,10 +39,20 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 
 1. Connect Solflare wallet
 2. Switch to Live mode
-3. On breakout, execution API is called
+3. On breakout, execution API is called (market order)
 4. Shorts require USDC collateral; longs use SOL
 5. Jupiter Perps uses request-fulfillment (keepers execute)
 6. **Tx build:** Uses minimal IDL + Anchor 0.29; returns serialized tx for Solflare to sign & send
+
+### Resting Limit Orders (Faster Entry)
+
+Jupiter Perps does not expose a user-callable on-chain instruction to place resting limit orders for **opening** positions. The `instantCreateLimitOrder` instruction requires keeper signatures. For faster entry (less slippage vs breakout level):
+
+1. When a pattern is detected in Live mode, the bot shows **Place resting limit order (optional)** with links to Jupiter Perps
+2. Click **Long SOL** or **Short SOL** to open Jupiter in a new tab
+3. On Jupiter: switch to Limit order, set trigger price to the breakout level (Long &gt; high, Short &lt; low)
+4. Place the order—it will execute when price hits, typically with better fills than market
+5. The bot also sends market orders when it detects a breakout; you can use one or both
 
 ## Backtest (Optimization)
 
