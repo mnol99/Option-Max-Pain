@@ -51,7 +51,7 @@ export interface TradeState {
   setup: PatternSetup | null;
   entryPrice: number | null;
   entryTime: number | null;
-  /** Management window end (5 min from entry) */
+  /** Management window end (time exit if TP/stop not hit) */
   windowEnd: number | null;
   /** Stop event count (max 2) */
   stopEventCount: number;

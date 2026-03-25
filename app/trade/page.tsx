@@ -22,6 +22,7 @@ import {
   getEffectiveTpLong,
   getEffectiveTpShort,
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
+  POSITION_MANAGEMENT_SEC,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 
@@ -720,17 +721,19 @@ export default function TradePage() {
                                 {t.exitReason === 'time' && t.entryTime != null && (
                                   <div className="mt-2 space-y-1 text-gray-600">
                                     <p>
-                                      Intended management window: 5 minutes after entry (~
-                                      {formatTime(t.entryTime + 300)}). Actual hold:{' '}
+                                      Intended management window:{' '}
+                                      {Math.floor(POSITION_MANAGEMENT_SEC / 60)} minutes after entry
+                                      (~{formatTime(t.entryTime + POSITION_MANAGEMENT_SEC)}). Actual
+                                      hold:{' '}
                                       {formatHoldDuration(t.entryTime, t.exitTime)}.
                                     </p>
-                                    {t.exitTime - t.entryTime > 360 ? (
+                                    {t.exitTime - t.entryTime > POSITION_MANAGEMENT_SEC + 60 ? (
                                       <p className="text-amber-800">
                                         This exit was <strong>delayed</strong>: the simulator only
                                         closes on a new price tick. If the tab was in the background,
                                         the PC slept, or the network dropped, ticks can pause for a
                                         long time—so &quot;time&quot; exit can happen far after the
-                                        5-minute mark, using the price from the first tick that
+                                        management window, using the price from the first tick that
                                         finally ran.
                                       </p>
                                     ) : (

@@ -14,8 +14,11 @@ import type {
 import { isBreakoutLong, isBreakoutShort } from './pattern-engine';
 
 const TICK = 0.01;
-/** Min TP distance (in price) to cover ~$1.35 fees on $1000 (0.135% of entry) */
-const FEE_MIN_BPS = 13.5;
+/** Min TP distance (in price) to cover round-trip fees (~0.20% of notional vs $1000 baseline) */
+const FEE_MIN_BPS = 20;
+
+/** Seconds from entry until time exit if TP/stop not hit (10 minutes) */
+export const POSITION_MANAGEMENT_SEC = 600;
 
 /** Jupiter Perps taker fee (approx.); used for performance “total cost” estimate */
 export const JUPITER_PERPS_EST_FEE_BPS_PER_SIDE = 6;
@@ -77,7 +80,7 @@ export function enterLong(
     position: 'long',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + 300, // 5 min
+    windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
     stopEventCount: 0,
   };
 }
@@ -94,7 +97,7 @@ export function enterShort(
     position: 'short',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + 300,
+    windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
     stopEventCount: 0,
   };
 }
@@ -194,7 +197,7 @@ export function checkPositionExit(
           position: 'short',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + 300,
+          windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
           stopEventCount: stopEventCount + 1,
         },
       };
@@ -241,7 +244,7 @@ export function checkPositionExit(
           position: 'long',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + 300,
+          windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
           stopEventCount: stopEventCount + 1,
         },
       };

@@ -25,7 +25,7 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 - **Short trigger:** Price breaks below inside bar low
 - **TP:** Entry ± range (high + range for long, low - range for short)
 - **Stop & reverse:** Opposite level break; max 2 stop events per setup
-- **Time exit:** 5 minutes from entry if TP/stop not hit
+- **Time exit:** 10 minutes from entry if TP/stop not hit
 
 ## Phase 2 (Current)
 
