@@ -288,7 +288,14 @@ export default function TradePage() {
 
     const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
     const state = { ...stateByStrategyRef.current };
-    const newTrades: Record<string, ClosedTrade> = {};
+    const newTrades: Record<string, ClosedTrade[]> = {};
+
+    const enrichList = (list: ClosedTrade[]): ClosedTrade[] =>
+      list.map((closedTrade) => ({
+        ...closedTrade,
+        pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+        solAmount: positionSize / closedTrade.entryPrice,
+      }));
 
     for (const s of TRADE_STRATEGIES) {
       const sid = s.id;
@@ -338,29 +345,19 @@ export default function TradePage() {
       }
 
       if (st.status === 'in_position') {
-        const { newState, closedTrade } = checkPositionExit(st, price, priceTime);
+        const { newState, closedTrades } = checkPositionExit(st, price, priceTime);
         state[sid] = newState;
-        if (closedTrade) {
-          const enriched: ClosedTrade = {
-            ...closedTrade,
-            pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
-            solAmount: positionSize / closedTrade.entryPrice,
-          };
-          newTrades[sid] = enriched;
+        if (closedTrades.length > 0) {
+          newTrades[sid] = closedTrades;
         }
         continue;
       }
 
       if (st.status === 'reversed') {
-        const { newState, closedTrade } = checkReversedExit(st, price, priceTime);
+        const { newState, closedTrades } = checkReversedExit(st, price, priceTime);
         state[sid] = newState;
-        if (closedTrade) {
-          const enriched: ClosedTrade = {
-            ...closedTrade,
-            pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
-            solAmount: positionSize / closedTrade.entryPrice,
-          };
-          newTrades[sid] = enriched;
+        if (closedTrades.length > 0) {
+          newTrades[sid] = closedTrades;
         }
       }
     }
@@ -372,8 +369,8 @@ export default function TradePage() {
       setTradesByStrategy((prev) => {
         const n = { ...prev };
         for (const k of Object.keys(newTrades)) {
-          const t = newTrades[k];
-          n[k] = [t, ...(prev[k] ?? [])];
+          const enriched = enrichList(newTrades[k]).reverse();
+          n[k] = [...enriched, ...(prev[k] ?? [])];
         }
         return n;
       });
@@ -868,6 +865,13 @@ export default function TradePage() {
                                 <p className="font-semibold text-gray-700 mt-2">Exit</p>
                                 <p>
                                   Exited at ${formatPrice(t.exitPrice)} ({t.exitReason}).
+                                  {t.exitReason === 'reverse' && (
+                                    <span className="text-gray-600">
+                                      {' '}
+                                      (first leg closed at opposite breakout; second leg continues as
+                                      reversed position.)
+                                    </span>
+                                  )}
                                 </p>
                                 {t.exitReason === 'time' && t.entryTime != null && (
                                   <div className="mt-2 space-y-1 text-gray-600">

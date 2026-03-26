@@ -117,16 +117,20 @@ export function enterShort(
   };
 }
 
+function newTradeId(): string {
+  return `trade-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export function checkPositionExit(
   state: TradeState,
   price: number,
   timestamp: number
-): { newState: TradeState; closedTrade?: ClosedTrade } {
+): { newState: TradeState; closedTrades: ClosedTrade[] } {
   if (state.status !== 'in_position' || !state.setup || !state.entryPrice)
-    return { newState: state };
+    return { newState: state, closedTrades: [] };
 
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
-  if (!windowEnd || !entryTime) return { newState: state };
+  if (!windowEnd || !entryTime) return { newState: state, closedTrades: [] };
 
   const tw = state.timeWindowSec || timeWindowSecFromSetup(setup);
   const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
@@ -159,19 +163,21 @@ export function checkPositionExit(
         timeWindowSec: POSITION_MANAGEMENT_SEC,
         lastTradedCandleUnixTime: setup.candleUnixTime,
       },
-      closedTrade: {
-        id: `trade-${Date.now()}`,
-        side: position,
-        entryPrice,
-        entryTime,
-        exitPrice: price,
-        exitTime: timestamp,
-        exitReason: 'time',
-        liquidationPrice,
-        pnl,
-        pnlPercent,
-        setup: auditSetup,
-      },
+      closedTrades: [
+        {
+          id: newTradeId(),
+          side: position,
+          entryPrice,
+          entryTime,
+          exitPrice: price,
+          exitTime: timestamp,
+          exitReason: 'time',
+          liquidationPrice,
+          pnl,
+          pnlPercent,
+          setup: auditSetup,
+        },
+      ],
     };
   }
 
@@ -192,23 +198,41 @@ export function checkPositionExit(
           timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'long',
-          entryPrice,
-          entryTime: state.entryTime!,
-          exitPrice: effectiveTpLong,
-          exitTime: timestamp,
-          exitReason: 'tp',
-          liquidationPrice: effectiveTpLong,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'long',
+            entryPrice,
+            entryTime: state.entryTime!,
+            exitPrice: effectiveTpLong,
+            exitTime: timestamp,
+            exitReason: 'tp',
+            liquidationPrice: effectiveTpLong,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
-    // Stop and reverse: break below low
+    // Stop and reverse: break below low — close long at breakout low, then open short
     if (price < setup.breakoutLow) {
+      const exitAt = setup.breakoutLow;
+      const pnlLeg = exitAt - entryPrice;
+      const pnlPercentLeg = (pnlLeg / entryPrice) * 100;
+      const firstLeg: ClosedTrade = {
+        id: newTradeId(),
+        side: 'long',
+        entryPrice,
+        entryTime,
+        exitPrice: exitAt,
+        exitTime: timestamp,
+        exitReason: 'reverse',
+        liquidationPrice: effectiveTpLong,
+        pnl: pnlLeg,
+        pnlPercent: pnlPercentLeg,
+        setup: auditSetup,
+      };
       return {
         newState: {
           ...state,
@@ -220,6 +244,7 @@ export function checkPositionExit(
           timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
+        closedTrades: [firstLeg],
       };
     }
   }
@@ -241,23 +266,41 @@ export function checkPositionExit(
           timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'short',
-          entryPrice,
-          entryTime: state.entryTime!,
-          exitPrice: effectiveTpShort,
-          exitTime: timestamp,
-          exitReason: 'tp',
-          liquidationPrice: effectiveTpShort,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'short',
+            entryPrice,
+            entryTime: state.entryTime!,
+            exitPrice: effectiveTpShort,
+            exitTime: timestamp,
+            exitReason: 'tp',
+            liquidationPrice: effectiveTpShort,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
-    // Stop and reverse: break above high
+    // Stop and reverse: break above high — close short at breakout high, then open long
     if (price > setup.breakoutHigh) {
+      const exitAt = setup.breakoutHigh;
+      const pnlLeg = entryPrice - exitAt;
+      const pnlPercentLeg = (pnlLeg / entryPrice) * 100;
+      const firstLeg: ClosedTrade = {
+        id: newTradeId(),
+        side: 'short',
+        entryPrice,
+        entryTime,
+        exitPrice: exitAt,
+        exitTime: timestamp,
+        exitReason: 'reverse',
+        liquidationPrice: effectiveTpShort,
+        pnl: pnlLeg,
+        pnlPercent: pnlPercentLeg,
+        setup: auditSetup,
+      };
       return {
         newState: {
           ...state,
@@ -269,23 +312,24 @@ export function checkPositionExit(
           timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
+        closedTrades: [firstLeg],
       };
     }
   }
 
-  return { newState: state };
+  return { newState: state, closedTrades: [] };
 }
 
 export function checkReversedExit(
   state: TradeState,
   price: number,
   timestamp: number
-): { newState: TradeState; closedTrade?: ClosedTrade } {
+): { newState: TradeState; closedTrades: ClosedTrade[] } {
   if (state.status !== 'reversed' || !state.setup || !state.entryPrice)
-    return { newState: state };
+    return { newState: state, closedTrades: [] };
 
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
-  if (!windowEnd || !entryTime) return { newState: state };
+  if (!windowEnd || !entryTime) return { newState: state, closedTrades: [] };
 
   const tw = state.timeWindowSec || timeWindowSecFromSetup(setup);
   const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
@@ -314,6 +358,7 @@ export function checkReversedExit(
         windowEnd: null,
         timeWindowSec: POSITION_MANAGEMENT_SEC,
       },
+      closedTrades: [],
     };
   }
 
@@ -334,19 +379,21 @@ export function checkReversedExit(
         timeWindowSec: POSITION_MANAGEMENT_SEC,
         lastTradedCandleUnixTime: setup.candleUnixTime,
       },
-      closedTrade: {
-        id: `trade-${Date.now()}`,
-        side: position,
-        entryPrice,
-        entryTime,
-        exitPrice: price,
-        exitTime: timestamp,
-        exitReason: 'time',
-        liquidationPrice,
-        pnl,
-        pnlPercent,
-        setup: auditSetup,
-      },
+      closedTrades: [
+        {
+          id: newTradeId(),
+          side: position,
+          entryPrice,
+          entryTime,
+          exitPrice: price,
+          exitTime: timestamp,
+          exitReason: 'time',
+          liquidationPrice,
+          pnl,
+          pnlPercent,
+          setup: auditSetup,
+        },
+      ],
     };
   }
 
@@ -367,19 +414,21 @@ export function checkReversedExit(
           timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'long',
-          entryPrice,
-          entryTime,
-          exitPrice: effectiveTpLong,
-          exitTime: timestamp,
-          exitReason: 'tp',
-          liquidationPrice: effectiveTpLong,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'long',
+            entryPrice,
+            entryTime,
+            exitPrice: effectiveTpLong,
+            exitTime: timestamp,
+            exitReason: 'tp',
+            liquidationPrice: effectiveTpLong,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
     // Stop out (sell stop at setup.stopLong)
@@ -399,19 +448,21 @@ export function checkReversedExit(
           stopEventCount: stopEventCount + 1,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'long',
-          entryPrice,
-          entryTime,
-          exitPrice: setup.stopLong,
-          exitTime: timestamp,
-          exitReason: 'stop',
-          liquidationPrice: setup.tpLong,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'long',
+            entryPrice,
+            entryTime,
+            exitPrice: setup.stopLong,
+            exitTime: timestamp,
+            exitReason: 'stop',
+            liquidationPrice: setup.tpLong,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
   }
@@ -433,19 +484,21 @@ export function checkReversedExit(
           timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'short',
-          entryPrice,
-          entryTime,
-          exitPrice: effectiveTpShort,
-          exitTime: timestamp,
-          exitReason: 'tp',
-          liquidationPrice: effectiveTpShort,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'short',
+            entryPrice,
+            entryTime,
+            exitPrice: effectiveTpShort,
+            exitTime: timestamp,
+            exitReason: 'tp',
+            liquidationPrice: effectiveTpShort,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
     // Stop out (buy stop at setup.stopShort)
@@ -465,24 +518,26 @@ export function checkReversedExit(
           stopEventCount: stopEventCount + 1,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
-        closedTrade: {
-          id: `trade-${Date.now()}`,
-          side: 'short',
-          entryPrice,
-          entryTime,
-          exitPrice: setup.stopShort,
-          exitTime: timestamp,
-          exitReason: 'stop',
-          liquidationPrice: setup.tpShort,
-          pnl,
-          pnlPercent,
-          setup: auditSetup,
-        },
+        closedTrades: [
+          {
+            id: newTradeId(),
+            side: 'short',
+            entryPrice,
+            entryTime,
+            exitPrice: setup.stopShort,
+            exitTime: timestamp,
+            exitReason: 'stop',
+            liquidationPrice: setup.tpShort,
+            pnl,
+            pnlPercent,
+            setup: auditSetup,
+          },
+        ],
       };
     }
   }
 
-  return { newState: state };
+  return { newState: state, closedTrades: [] };
 }
 
 export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
