@@ -1,6 +1,6 @@
 # Solana Trading Bot Setup
 
-The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers for Jupiter Perps (short selling supported).
+The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars (separate tabs on `/trade`), with breakout triggers for Jupiter Perps (short selling supported).
 
 ## Phase 1: Data + Pattern (Current)
 
@@ -14,9 +14,9 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
    - Go to [/trade](/trade)
 
 3. **Trade window**
-   - Pattern detection runs automatically on 5m SOL candles
-   - Paper-trade simulation: no real execution yet
-   - Metrics: PnL, win rate, Sharpe ratio
+   - Use the **5m / 10m / 60m** strategy tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**)
+   - Paper-trade simulation: no real execution until Live mode
+   - Metrics: PnL, win rate, Sharpe ratio (per tab)
 
 ## Pattern Rules
 
@@ -25,7 +25,7 @@ The SOL trading bot uses a 5-minute inside-bar pattern with breakout triggers fo
 - **Short trigger:** Price breaks below inside bar low
 - **TP:** Entry ± range (high + range for long, low - range for short)
 - **Stop & reverse:** Opposite level break; max 2 stop events per setup
-- **Time exit:** 10 minutes from entry if TP/stop not hit
+- **Time exit:** **2× bar length** from entry (e.g. 10m for 5m bars, 20m for 10m bars, 2h for 60m bars) if TP/stop not hit
 
 ## Phase 2 (Current)
 

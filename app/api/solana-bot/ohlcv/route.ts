@@ -1,20 +1,23 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   getCandles,
-  get5mBoundary,
+  getCurrentCandleBoundary,
   getWarmupMinutes,
 } from '@/lib/solana-bot/candle-aggregator';
+import { parseIntervalParam } from '@/lib/solana-bot/candle-intervals';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const candles = getCandles();
+    const intervalSec = parseIntervalParam(req.nextUrl.searchParams.get('interval'));
+    const candles = getCandles(intervalSec);
     const now = Math.floor(Date.now() / 1000);
-    const warmupMinutes = getWarmupMinutes();
+    const warmupMinutes = getWarmupMinutes(intervalSec);
 
     return NextResponse.json({
       success: true,
       data: candles,
-      currentBoundary: get5mBoundary(now),
+      intervalSec,
+      currentBoundary: getCurrentCandleBoundary(intervalSec),
       warmupMinutes,
     });
   } catch (err) {

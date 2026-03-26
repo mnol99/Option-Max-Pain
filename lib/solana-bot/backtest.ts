@@ -64,10 +64,11 @@ function simulateTradeWindow(
   setup: PatternSetup,
   side: 'long' | 'short',
   nextCandle: OHLCVCandle,
-  entryTime: number
+  entryTime: number,
+  barSec: number
 ): { exitPrice: number; exitReason: 'tp' | 'time' | 'stop' | 'reverse'; exitTime: number } {
   const { open, high, low, close } = nextCandle;
-  const exitTime = nextCandle.unixTime + 300;
+  const exitTime = nextCandle.unixTime + barSec;
 
   if (side === 'long') {
     if (low <= setup.breakoutLow) {
@@ -114,6 +115,8 @@ export function runBacktest(candles: OHLCVCandle[]): BacktestReport {
 
   // Sort oldest first for sequential backtest
   const sorted = [...candles].sort((a, b) => a.unixTime - b.unixTime);
+  const barSec =
+    sorted.length >= 2 ? Math.abs(sorted[1].unixTime - sorted[0].unixTime) : 300;
 
   const trades: SimulatedTrade[] = [];
   const detectedPatterns: DetectedPattern[] = [];
@@ -126,7 +129,7 @@ export function runBacktest(candles: OHLCVCandle[]): BacktestReport {
 
   for (let i = 3; i < sorted.length - 1; i++) {
     const window = [sorted[i], sorted[i - 1], sorted[i - 2], sorted[i - 3]];
-    const detected = detectPattern(window);
+    const detected = detectPattern(window, barSec);
 
     if (detected) {
       const isDoubleInside = setup && detected.candleUnixTime !== setup.candleUnixTime;
@@ -149,7 +152,7 @@ export function runBacktest(candles: OHLCVCandle[]): BacktestReport {
       const lastRecorded = detectedPatterns[detectedPatterns.length - 1];
       if (!lastRecorded || lastRecorded.candleUnixTime !== (setup.candleUnixTime ?? 0)) {
         detectedPatterns.push({
-          time: sorted[setupCandleIndex].unixTime + 300,
+          time: sorted[setupCandleIndex].unixTime + barSec,
           candleUnixTime: setup.candleUnixTime ?? 0,
           breakoutHigh: setup.breakoutHigh,
           breakoutLow: setup.breakoutLow,
@@ -192,7 +195,8 @@ export function runBacktest(candles: OHLCVCandle[]): BacktestReport {
           setup,
           side,
           nextCandle,
-          sorted[i].unixTime + 300
+          sorted[i].unixTime + barSec,
+          barSec
         );
 
         const intendedEntry = side === 'long' ? intendedLong : intendedShort;

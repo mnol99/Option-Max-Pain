@@ -22,9 +22,12 @@ import {
   getEffectiveTpLong,
   getEffectiveTpShort,
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
+  timeWindowSecFromSetup,
   POSITION_MANAGEMENT_SEC,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
+import { TRADE_STRATEGIES, defaultStrategyId } from '@/lib/solana-bot/strategy-tabs';
+import { intervalLabel } from '@/lib/solana-bot/candle-intervals';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
@@ -55,33 +58,77 @@ function formatHoldDuration(entryTime: number, exitTime: number): string {
   return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
 }
 
+function timeWindowSecFromClosedTrade(t: ClosedTrade): number {
+  const bar = t.setup?.barDurationSec;
+  if (bar != null && bar > 0) return bar * 2;
+  return POSITION_MANAGEMENT_SEC;
+}
+
+function emptyTradesMap(): Record<string, ClosedTrade[]> {
+  return Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, [] as ClosedTrade[]]));
+}
+
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
   const [mounted, setMounted] = useState(false);
+  const [activeStrategyId, setActiveStrategyId] = useState(defaultStrategyId);
   const [auditExpanded, setAuditExpanded] = useState<Set<string>>(new Set());
-  const [breakoutConfirmCount, setBreakoutConfirmCount] = useState<{ long: number; short: number }>({ long: 0, short: 0 });
-  const [state, setState] = useState<TradeState>(createInitialState());
+  const [breakoutByStrategy, setBreakoutByStrategy] = useState<
+    Record<string, { long: number; short: number }>
+  >(() =>
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
+  );
+  const [stateByStrategy, setStateByStrategy] = useState<Record<string, TradeState>>(() =>
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, createInitialState()]))
+  );
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
-  const [candles, setCandles] = useState<OHLCVCandle[]>([]);
-  const [trades, setTrades] = useState<ClosedTrade[]>([]);
+  const [candlesByStrategy, setCandlesByStrategy] = useState<
+    Record<string, OHLCVCandle[]>
+  >(() => Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, []])));
+  const [tradesByStrategy, setTradesByStrategy] = useState<Record<string, ClosedTrade[]>>(
+    emptyTradesMap
+  );
+  const [warmupByStrategy, setWarmupByStrategy] = useState<Record<string, number>>(() =>
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, 0]))
+  );
   const [error, setError] = useState<string | null>(null);
-  const [warmupMinutes, setWarmupMinutes] = useState<number>(0);
   const [liveMode, setLiveMode] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
-  const [paperStartingBalance, setPaperStartingBalance] = useState(1000);
+  const [paperStartingBalance, setPaperStartingBalance] = useState(3000);
   const [paperPositionSizeUsd, setPaperPositionSizeUsd] = useState(1000);
   const [liveAmountToRun, setLiveAmountToRun] = useState(1000);
   const [leverage, setLeverage] = useState(1.5);
   const [useChartPrice, setUseChartPrice] = useState(false);
-  const lastCandleCheck = useRef(0);
-  const enteringRef = useRef(false);
+  const liveAmountByStrategyRef = useRef<Record<string, number>>(
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, 1000]))
+  );
+  const enteringRef = useRef<Record<string, boolean>>(
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, false]))
+  );
+  const stateByStrategyRef = useRef(stateByStrategy);
+  const breakoutRef = useRef<Record<string, { long: number; short: number }>>(
+    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
+  );
+
+  useEffect(() => {
+    stateByStrategyRef.current = stateByStrategy;
+  }, [stateByStrategy]);
+
+  const activeDef = TRADE_STRATEGIES.find((s) => s.id === activeStrategyId) ?? TRADE_STRATEGIES[0];
+  const activeIntervalSec = activeDef.intervalSec;
+  const state = stateByStrategy[activeStrategyId] ?? createInitialState();
+  const candles = candlesByStrategy[activeStrategyId] ?? [];
+  const trades = tradesByStrategy[activeStrategyId] ?? [];
+  const warmupMinutes = warmupByStrategy[activeStrategyId] ?? 0;
+  const breakoutConfirmCount = breakoutByStrategy[activeStrategyId] ?? { long: 0, short: 0 };
 
   const executeOnBreakout = useCallback(
-    async (side: 'long' | 'short', solPrice: number) => {
+    async (side: 'long' | 'short', solPrice: number, strategyId: string) => {
       if (!publicKey || !wallet?.adapter) return;
       setExecError(null);
+      const sizeUsd = liveAmountByStrategyRef.current[strategyId] ?? liveAmountToRun;
       try {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
@@ -89,7 +136,7 @@ export default function TradePage() {
         body: JSON.stringify({
           side,
           owner: publicKey.toString(),
-          sizeUsd: liveAmountToRun,
+          sizeUsd,
           leverage,
           solPrice: side === 'long' ? solPrice : undefined,
         }),
@@ -115,6 +162,12 @@ export default function TradePage() {
     [publicKey, wallet, connection, liveAmountToRun, leverage]
   );
 
+  useEffect(() => {
+    for (const s of TRADE_STRATEGIES) {
+      liveAmountByStrategyRef.current[s.id] = liveAmountToRun;
+    }
+  }, [liveAmountToRun]);
+
   const fetchPrice = useCallback(async () => {
     try {
       const res = await fetch('/api/solana-bot/price');
@@ -133,25 +186,35 @@ export default function TradePage() {
 
   const fetchOHLCV = useCallback(async () => {
     try {
-      const res = await fetch('/api/solana-bot/ohlcv');
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
-        const newCandles = json.data;
-        setCandles(newCandles);
-        setWarmupMinutes(json.warmupMinutes ?? 0);
-        setError(null);
-        lastCandleCheck.current = Date.now();
-        if (useChartPrice && newCandles.length > 0) {
-          setPrice(newCandles[0].close);
+      const results = await Promise.all(
+        TRADE_STRATEGIES.map(async (s) => {
+          const res = await fetch(`/api/solana-bot/ohlcv?interval=${s.intervalSec}`);
+          const json = await res.json();
+          return { id: s.id, json };
+        })
+      );
+      const nextCandles: Record<string, OHLCVCandle[]> = {};
+      const nextWarmup: Record<string, number> = {};
+      for (const { id, json } of results) {
+        if (json.success && Array.isArray(json.data)) {
+          nextCandles[id] = json.data;
+        }
+        if (json.success) nextWarmup[id] = json.warmupMinutes ?? 0;
+      }
+      setCandlesByStrategy((prev) => ({ ...prev, ...nextCandles }));
+      setWarmupByStrategy((prev) => ({ ...prev, ...nextWarmup }));
+      setError(null);
+      if (useChartPrice) {
+        const chartCandles = nextCandles[activeStrategyId];
+        if (chartCandles && chartCandles.length > 0) {
+          setPrice(chartCandles[0].close);
           setPriceTime(Math.floor(Date.now() / 1000));
         }
-      } else {
-        setError(json.error || 'Failed to fetch OHLCV');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'OHLCV fetch failed');
     }
-  }, [useChartPrice]);
+  }, [useChartPrice, activeStrategyId]);
 
   useEffect(() => setMounted(true), []);
 
@@ -170,117 +233,181 @@ export default function TradePage() {
     }
   }, [useChartPrice, candles]);
 
-  // Pattern detection when candles update
-  // Runs on: idle, stopped (new pattern), and pattern_detected (double inside: update to newest inside bar)
+  // Pattern detection when candles update (each strategy / bar size)
   useEffect(() => {
-    if (candles.length < 4) return;
-    if (state.status !== 'idle' && state.status !== 'stopped' && state.status !== 'pattern_detected') return;
-    const setup = detectPattern(candles);
-    if (setup) {
-      if (setup.candleUnixTime === state.lastTradedCandleUnixTime) return;
-      const isDoubleInside = state.status === 'pattern_detected' && state.setup
-        && state.setup.candleUnixTime !== setup.candleUnixTime;
-      setState((s) => ({
-        ...createPatternDetectedState(setup),
-        lastTradedCandleUnixTime: s.lastTradedCandleUnixTime,
-      }));
-      if (isDoubleInside) setBreakoutConfirmCount({ long: 0, short: 0 });
-    }
-  }, [candles]);
+    setStateByStrategy((prev) => {
+      let next = prev;
+      let changed = false;
+      for (const s of TRADE_STRATEGIES) {
+        const c = candlesByStrategy[s.id] ?? [];
+        if (c.length < 4) continue;
+        const st = prev[s.id];
+        if (!st) continue;
+        if (st.status !== 'idle' && st.status !== 'stopped' && st.status !== 'pattern_detected')
+          continue;
+        const setup = detectPattern(c, s.intervalSec);
+        if (!setup || setup.candleUnixTime === st.lastTradedCandleUnixTime) continue;
+        const isDoubleInside =
+          st.status === 'pattern_detected' &&
+          st.setup &&
+          st.setup.candleUnixTime !== setup.candleUnixTime;
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[s.id] = {
+          ...createPatternDetectedState(setup),
+          lastTradedCandleUnixTime: prev[s.id]?.lastTradedCandleUnixTime,
+        };
+        if (isDoubleInside) breakoutRef.current[s.id] = { long: 0, short: 0 };
+      }
+      return changed ? next : prev;
+    });
+  }, [candlesByStrategy]);
 
-  // Price polling - faster when in trade or pattern detected (skip when using chart price)
+  // Price polling — fast if ANY strategy needs it
   useEffect(() => {
     if (useChartPrice) return;
-    const ms =
-      state.status === 'pattern_detected' || state.status === 'in_position' || state.status === 'reversed'
-        ? PRICE_POLL_MS
-        : PRICE_POLL_IDLE_MS;
+    const anyActive = TRADE_STRATEGIES.some((s) => {
+      const st = stateByStrategy[s.id];
+      return (
+        st?.status === 'pattern_detected' ||
+        st?.status === 'in_position' ||
+        st?.status === 'reversed'
+      );
+    });
+    const ms = anyActive ? PRICE_POLL_MS : PRICE_POLL_IDLE_MS;
     fetchPrice();
     const id = setInterval(fetchPrice, ms);
     return () => clearInterval(id);
-  }, [state.status, fetchPrice, useChartPrice]);
+  }, [stateByStrategy, fetchPrice, useChartPrice]);
 
-  // Process price when we have it
+  // Process price for all strategies (one mutable state copy per tick)
   useEffect(() => {
     if (price == null || priceTime == null) return;
 
-    if (state.status === 'pattern_detected' && state.setup && !enteringRef.current) {
-      const setup = state.setup;
-      const longBreakout = isBreakoutLong(price, setup);
-      const shortBreakout = isBreakoutShort(price, setup);
+    const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
+    const state = { ...stateByStrategyRef.current };
+    const newTrades: Record<string, ClosedTrade> = {};
 
-      // Require 1 confirmed poll beyond level (faster entry, closer to breakout level)
-      if (longBreakout) {
-        const prevLong = breakoutConfirmCount.long;
-        setBreakoutConfirmCount((c) => ({ ...c, long: c.long + 1, short: 0 }));
-        if (prevLong >= 0) {
-          enteringRef.current = true;
-          setBreakoutConfirmCount({ long: 0, short: 0 });
-          setState((s) => enterLong(s, price, priceTime));
-          if (liveMode && connected) executeOnBreakout('long', price);
+    for (const s of TRADE_STRATEGIES) {
+      const sid = s.id;
+      let st = state[sid];
+      if (!st) continue;
+
+      if (st.status === 'pattern_detected' && st.setup && !enteringRef.current[sid]) {
+        const setup = st.setup;
+        const longBreakout = isBreakoutLong(price, setup);
+        const shortBreakout = isBreakoutShort(price, setup);
+        const bc = breakoutRef.current[sid];
+
+        if (longBreakout) {
+          const prevLong = bc.long;
+          bc.long += 1;
+          bc.short = 0;
+          if (prevLong >= 0) {
+            enteringRef.current[sid] = true;
+            bc.long = 0;
+            bc.short = 0;
+            st = enterLong(st, price, priceTime);
+            state[sid] = st;
+            if (liveMode && connected) void executeOnBreakout('long', price, sid);
+          }
+          continue;
         }
-        return;
-      }
-      if (shortBreakout) {
-        const prevShort = breakoutConfirmCount.short;
-        setBreakoutConfirmCount((c) => ({ ...c, short: c.short + 1, long: 0 }));
-        if (prevShort >= 0) {
-          enteringRef.current = true;
-          setBreakoutConfirmCount({ long: 0, short: 0 });
-          setState((s) => enterShort(s, price, priceTime));
-          if (liveMode && connected) executeOnBreakout('short', price);
+        if (shortBreakout) {
+          const prevShort = bc.short;
+          bc.short += 1;
+          bc.long = 0;
+          if (prevShort >= 0) {
+            enteringRef.current[sid] = true;
+            bc.long = 0;
+            bc.short = 0;
+            st = enterShort(st, price, priceTime);
+            state[sid] = st;
+            if (liveMode && connected) void executeOnBreakout('short', price, sid);
+          }
+          continue;
         }
-        return;
+        bc.long = 0;
+        bc.short = 0;
       }
-      // Price not beyond level - reset confirmation
-      setBreakoutConfirmCount({ long: 0, short: 0 });
-    }
 
-    // Clear entering guard when we exit to idle/stopped
-    if ((state.status === 'idle' || state.status === 'stopped') && enteringRef.current) {
-      enteringRef.current = false;
-    }
-
-    if (state.status === 'in_position') {
-      const { newState, closedTrade } = checkPositionExit(state, price, priceTime);
-      setState(newState);
-      if (closedTrade) {
-        const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
-        const enriched: ClosedTrade = {
-          ...closedTrade,
-          pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
-          solAmount: positionSize / closedTrade.entryPrice,
-        };
-        setTrades((t) => [enriched, ...t]);
+      if ((st.status === 'idle' || st.status === 'stopped') && enteringRef.current[sid]) {
+        enteringRef.current[sid] = false;
       }
-      return;
-    }
 
-    if (state.status === 'reversed') {
-      const { newState, closedTrade } = checkReversedExit(state, price, priceTime);
-      setState(newState);
-      if (closedTrade) {
-        const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
-        const enriched: ClosedTrade = {
-          ...closedTrade,
-          pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
-          solAmount: positionSize / closedTrade.entryPrice,
-        };
-        setTrades((t) => [enriched, ...t]);
+      if (st.status === 'in_position') {
+        const { newState, closedTrade } = checkPositionExit(st, price, priceTime);
+        state[sid] = newState;
+        if (closedTrade) {
+          const enriched: ClosedTrade = {
+            ...closedTrade,
+            pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+            solAmount: positionSize / closedTrade.entryPrice,
+          };
+          newTrades[sid] = enriched;
+        }
+        continue;
       }
-      return;
+
+      if (st.status === 'reversed') {
+        const { newState, closedTrade } = checkReversedExit(st, price, priceTime);
+        state[sid] = newState;
+        if (closedTrade) {
+          const enriched: ClosedTrade = {
+            ...closedTrade,
+            pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+            solAmount: positionSize / closedTrade.entryPrice,
+          };
+          newTrades[sid] = enriched;
+        }
+      }
     }
 
-    // When stopped, we stay stopped until next pattern is detected (from candles)
-  }, [price, priceTime, state, liveMode, connected, executeOnBreakout, paperPositionSizeUsd, liveAmountToRun, leverage, breakoutConfirmCount]);
+    stateByStrategyRef.current = state;
+    setStateByStrategy(state);
+
+    if (Object.keys(newTrades).length > 0) {
+      setTradesByStrategy((prev) => {
+        const n = { ...prev };
+        for (const k of Object.keys(newTrades)) {
+          const t = newTrades[k];
+          n[k] = [t, ...(prev[k] ?? [])];
+        }
+        return n;
+      });
+    }
+
+    setBreakoutByStrategy(() => {
+      const n: Record<string, { long: number; short: number }> = {};
+      for (const s of TRADE_STRATEGIES) {
+        n[s.id] = { ...breakoutRef.current[s.id] };
+      }
+      return n;
+    });
+  }, [
+    price,
+    priceTime,
+    liveMode,
+    connected,
+    executeOnBreakout,
+    paperPositionSizeUsd,
+    liveAmountToRun,
+  ]);
 
   const metrics = computeMetrics(trades);
+  const totalPnlAllStrategies = TRADE_STRATEGIES.reduce(
+    (sum, s) => sum + computeMetrics(tradesByStrategy[s.id] ?? []).totalPnl,
+    0
+  );
 
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between flex-wrap gap-4">
             <h1 className="text-2xl font-bold text-gray-900">SOL Trading Bot</h1>
             <div className="flex items-center gap-4">
               {connected && (
@@ -319,16 +446,40 @@ export default function TradePage() {
                 </a>
               </nav>
             </div>
+            </div>
+            <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+              <span className="text-xs text-gray-500 self-center mr-1">Strategy:</span>
+              {TRADE_STRATEGIES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setActiveStrategyId(s.id)}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    activeStrategyId === s.id
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8">
+        <p className="text-sm text-gray-600 mb-4">
+          Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
+          Each tab keeps its own state, trade log, and performance ($
+          {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode).
+        </p>
         {warmupMinutes > 0 && candles.length < 4 && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
             <p className="text-amber-800 font-medium">Building candle data from Jupiter Perps</p>
             <p className="text-amber-700 text-sm mt-1">
-              Price feed is live. First pattern available in ~{warmupMinutes} min (need 4 completed 5m candles).
+              Price feed is live. First {intervalLabel(activeIntervalSec)} pattern available in ~
+              {warmupMinutes} min (need 4 completed {intervalLabel(activeIntervalSec)} candles).
             </p>
           </div>
         )}
@@ -354,7 +505,7 @@ export default function TradePage() {
                   <div>
                     <span className="text-sm text-slate-600">Current Balance: </span>
                     <span className="font-semibold text-slate-900">
-                      ${(paperStartingBalance + metrics.totalPnl).toFixed(2)}
+                      ${(paperStartingBalance + totalPnlAllStrategies).toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -456,7 +607,7 @@ export default function TradePage() {
                   </span>
                 </div>
                 <p className="text-xs text-gray-500">
-                  Jupiter Perps — last 5m close
+                  Jupiter Perps — last {intervalLabel(activeIntervalSec)} close
                 </p>
                 <div className="flex justify-between">
                   <span className="text-gray-600">SOL Price (live)</span>
@@ -475,7 +626,7 @@ export default function TradePage() {
                     className="rounded"
                   />
                   <span className="text-sm text-gray-600">
-                    Use chart price for breakouts (last 5m close)
+                    Use chart price for breakouts (last {intervalLabel(activeIntervalSec)} close)
                   </span>
                 </label>
                 <div className="flex justify-between">
@@ -722,12 +873,13 @@ export default function TradePage() {
                                   <div className="mt-2 space-y-1 text-gray-600">
                                     <p>
                                       Intended management window:{' '}
-                                      {Math.floor(POSITION_MANAGEMENT_SEC / 60)} minutes after entry
-                                      (~{formatTime(t.entryTime + POSITION_MANAGEMENT_SEC)}). Actual
-                                      hold:{' '}
+                                      {Math.floor(timeWindowSecFromClosedTrade(t) / 60)} minutes after
+                                      entry (~
+                                      {formatTime(t.entryTime + timeWindowSecFromClosedTrade(t))}).
+                                      Actual hold:{' '}
                                       {formatHoldDuration(t.entryTime, t.exitTime)}.
                                     </p>
-                                    {t.exitTime - t.entryTime > POSITION_MANAGEMENT_SEC + 60 ? (
+                                    {t.exitTime - t.entryTime > timeWindowSecFromClosedTrade(t) + 60 ? (
                                       <p className="text-amber-800">
                                         This exit was <strong>delayed</strong>: the simulator only
                                         closes on a new price tick. If the tab was in the background,
@@ -756,7 +908,9 @@ export default function TradePage() {
             </section>
 
             <section className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Candles</h2>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                Recent Candles ({intervalLabel(activeIntervalSec)})
+              </h2>
               <p className="text-xs text-gray-500 mb-2">
                 Built from Jupiter Perps (Doves oracle), polled every 15s. Jupiter&apos;s chart may use
                 different data/aggregation—small differences possible.

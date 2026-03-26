@@ -1,6 +1,6 @@
 /**
  * Pattern detection: inside bar + smallest of past 3 ranges
- * 5-minute chart for SOL
+ * Works for any bar length (5m, 10m, 60m, …).
  */
 
 import type { OHLCVCandle, PatternSetup } from './types';
@@ -30,10 +30,24 @@ function isSmallestRange(
 }
 
 /**
+ * Infer bar length from consecutive completed candles (newest first).
+ */
+export function inferBarDurationSec(candles: OHLCVCandle[]): number {
+  if (candles.length < 2) return 300;
+  const a = candles[0].unixTime;
+  const b = candles[1].unixTime;
+  const d = Math.abs(a - b);
+  return d > 0 ? d : 300;
+}
+
+/**
  * Detect pattern from last 4 candles (newest = index 0)
  * Candles expected: [current (just closed), prior1, prior2, prior3]
  */
-export function detectPattern(candles: OHLCVCandle[]): PatternSetup | null {
+export function detectPattern(
+  candles: OHLCVCandle[],
+  barDurationSec?: number
+): PatternSetup | null {
   if (candles.length < 4) return null;
   const [current, prior1, prior2, prior3] = candles;
   if (!current || !prior1 || !prior2 || !prior3) return null;
@@ -41,6 +55,7 @@ export function detectPattern(candles: OHLCVCandle[]): PatternSetup | null {
   if (!isInsideBar(current, prior1)) return null;
   if (!isSmallestRange(current, prior1, prior2, prior3)) return null;
 
+  const barSec = barDurationSec ?? inferBarDurationSec(candles);
   const range = current.high - current.low;
   const tick = 0.01; // 1 cent tick for stop levels
 
@@ -53,9 +68,10 @@ export function detectPattern(candles: OHLCVCandle[]): PatternSetup | null {
     tpShort: current.low - range,
     stopShort: current.high + tick,
     stopLong: current.low - tick,
-    periodEnd: current.unixTime + 300, // 5 min after candle start
+    periodEnd: current.unixTime + barSec,
     /** Candle start (unix) for display - matches first row in Recent Candles */
     candleUnixTime: current.unixTime,
+    barDurationSec: barSec,
   };
 }
 

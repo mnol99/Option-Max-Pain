@@ -17,8 +17,16 @@ const TICK = 0.01;
 /** Min TP distance (in price) to cover round-trip fees (~0.20% of notional vs $1000 baseline) */
 const FEE_MIN_BPS = 20;
 
-/** Seconds from entry until time exit if TP/stop not hit (10 minutes) */
+/**
+ * Default time window (seconds) when bar duration unknown — 10m for legacy 5m bars (2× bar).
+ */
 export const POSITION_MANAGEMENT_SEC = 600;
+
+/** Time exit window = 2 × bar length (one bar to manage the trade). */
+export function timeWindowSecFromSetup(setup: PatternSetup): number {
+  const bar = setup.barDurationSec > 0 ? setup.barDurationSec : 300;
+  return bar * 2;
+}
 
 /** Jupiter Perps taker fee (approx.); used for performance “total cost” estimate */
 export const JUPITER_PERPS_EST_FEE_BPS_PER_SIDE = 6;
@@ -52,11 +60,13 @@ export function createInitialState(): TradeState {
     entryPrice: null,
     entryTime: null,
     windowEnd: null,
+    timeWindowSec: POSITION_MANAGEMENT_SEC,
     stopEventCount: 0,
   };
 }
 
 export function createPatternDetectedState(setup: PatternSetup): TradeState {
+  const tw = timeWindowSecFromSetup(setup);
   return {
     status: 'pattern_detected',
     position: null,
@@ -64,6 +74,7 @@ export function createPatternDetectedState(setup: PatternSetup): TradeState {
     entryPrice: null,
     entryTime: null,
     windowEnd: null,
+    timeWindowSec: tw,
     stopEventCount: 0,
   };
 }
@@ -74,13 +85,15 @@ export function enterLong(
   timestamp: number
 ): TradeState {
   if (!state.setup || state.status !== 'pattern_detected') return state;
+  const tw = timeWindowSecFromSetup(state.setup);
   return {
     ...state,
     status: 'in_position',
     position: 'long',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
+    windowEnd: timestamp + tw,
+    timeWindowSec: tw,
     stopEventCount: 0,
   };
 }
@@ -91,13 +104,15 @@ export function enterShort(
   timestamp: number
 ): TradeState {
   if (!state.setup || state.status !== 'pattern_detected') return state;
+  const tw = timeWindowSecFromSetup(state.setup);
   return {
     ...state,
     status: 'in_position',
     position: 'short',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
+    windowEnd: timestamp + tw,
+    timeWindowSec: tw,
     stopEventCount: 0,
   };
 }
@@ -113,6 +128,7 @@ export function checkPositionExit(
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
   if (!windowEnd || !entryTime) return { newState: state };
 
+  const tw = state.timeWindowSec || timeWindowSecFromSetup(setup);
   const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
   const effectiveTpShort = getEffectiveTpShort(entryPrice, setup.range);
   const liquidationPrice = position === 'long' ? effectiveTpLong : effectiveTpShort;
@@ -123,6 +139,7 @@ export function checkPositionExit(
     tpLong: setup.tpLong,
     tpShort: setup.tpShort,
     candleUnixTime: setup.candleUnixTime,
+    barDurationSec: setup.barDurationSec,
   };
 
   // Time exit
@@ -139,6 +156,7 @@ export function checkPositionExit(
         entryPrice: null,
         entryTime: null,
         windowEnd: null,
+        timeWindowSec: POSITION_MANAGEMENT_SEC,
         lastTradedCandleUnixTime: setup.candleUnixTime,
       },
       closedTrade: {
@@ -171,6 +189,7 @@ export function checkPositionExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
@@ -197,7 +216,8 @@ export function checkPositionExit(
           position: 'short',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
+          windowEnd: timestamp + tw,
+          timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
       };
@@ -218,6 +238,7 @@ export function checkPositionExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
@@ -244,7 +265,8 @@ export function checkPositionExit(
           position: 'long',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + POSITION_MANAGEMENT_SEC,
+          windowEnd: timestamp + tw,
+          timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
       };
@@ -265,6 +287,7 @@ export function checkReversedExit(
   const { setup, position, entryPrice, entryTime, windowEnd, stopEventCount } = state;
   if (!windowEnd || !entryTime) return { newState: state };
 
+  const tw = state.timeWindowSec || timeWindowSecFromSetup(setup);
   const effectiveTpLong = getEffectiveTpLong(entryPrice, setup.range);
   const effectiveTpShort = getEffectiveTpShort(entryPrice, setup.range);
   const liquidationPrice = position === 'long' ? effectiveTpLong : effectiveTpShort;
@@ -275,6 +298,7 @@ export function checkReversedExit(
     tpLong: setup.tpLong,
     tpShort: setup.tpShort,
     candleUnixTime: setup.candleUnixTime,
+    barDurationSec: setup.barDurationSec,
   };
 
   // Circuit breaker: max 2 stop events
@@ -288,6 +312,7 @@ export function checkReversedExit(
         entryPrice: null,
         entryTime: null,
         windowEnd: null,
+        timeWindowSec: POSITION_MANAGEMENT_SEC,
       },
     };
   }
@@ -306,6 +331,7 @@ export function checkReversedExit(
         entryPrice: null,
         entryTime: null,
         windowEnd: null,
+        timeWindowSec: POSITION_MANAGEMENT_SEC,
         lastTradedCandleUnixTime: setup.candleUnixTime,
       },
       closedTrade: {
@@ -338,6 +364,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
@@ -368,6 +395,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           stopEventCount: stopEventCount + 1,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
@@ -402,6 +430,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },
         closedTrade: {
@@ -432,6 +461,7 @@ export function checkReversedExit(
           entryPrice: null,
           entryTime: null,
           windowEnd: null,
+          timeWindowSec: POSITION_MANAGEMENT_SEC,
           stopEventCount: stopEventCount + 1,
           lastTradedCandleUnixTime: setup.candleUnixTime,
         },

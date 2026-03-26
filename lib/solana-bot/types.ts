@@ -33,6 +33,8 @@ export interface PatternSetup {
   periodEnd: number;
   /** Candle start (unix) - matches first row in Recent Candles */
   candleUnixTime?: number;
+  /** Bar length in seconds (300 = 5m, 600 = 10m, 3600 = 1h) */
+  barDurationSec: number;
 }
 
 export type PositionSide = 'long' | 'short' | null;
@@ -53,6 +55,8 @@ export interface TradeState {
   entryTime: number | null;
   /** Management window end (time exit if TP/stop not hit) */
   windowEnd: number | null;
+  /** Seconds from entry to time exit (2 × bar length for this strategy) */
+  timeWindowSec: number;
   /** Stop event count (max 2) */
   stopEventCount: number;
   /** Don't re-enter same pattern (candle we just traded) */
@@ -79,7 +83,13 @@ export interface ClosedTrade {
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,
-    'breakoutHigh' | 'breakoutLow' | 'range' | 'tpLong' | 'tpShort' | 'candleUnixTime'
+    | 'breakoutHigh'
+    | 'breakoutLow'
+    | 'range'
+    | 'tpLong'
+    | 'tpShort'
+    | 'candleUnixTime'
+    | 'barDurationSec'
   >;
 }
 
