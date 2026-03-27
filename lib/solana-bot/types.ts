@@ -90,6 +90,7 @@ export interface ClosedTrade {
     | 'tpShort'
     | 'candleUnixTime'
     | 'barDurationSec'
+    | 'periodEnd'
   >;
 }
 

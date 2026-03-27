@@ -24,6 +24,7 @@ import {
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
   timeWindowSecFromSetup,
   POSITION_MANAGEMENT_SEC,
+  managementWindowEndFromClosedTradeSetup,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import { TRADE_STRATEGIES, defaultStrategyId } from '@/lib/solana-bot/strategy-tabs';
@@ -62,6 +63,13 @@ function timeWindowSecFromClosedTrade(t: ClosedTrade): number {
   const bar = t.setup?.barDurationSec;
   if (bar != null && bar > 0) return bar * 2;
   return POSITION_MANAGEMENT_SEC;
+}
+
+function tradeManagementWindowEndUnix(t: ClosedTrade): number {
+  return (
+    managementWindowEndFromClosedTradeSetup(t.setup) ??
+    t.entryTime + timeWindowSecFromClosedTrade(t)
+  );
 }
 
 function emptyTradesMap(): Record<string, ClosedTrade[]> {
@@ -835,6 +843,16 @@ export default function TradePage() {
                                   <span>${formatPrice(t.setup.breakoutLow)}</span>
                                   <span>Range:</span>
                                   <span>${formatPrice(t.setup.range)}</span>
+                                  {t.setup.periodEnd != null && t.setup.barDurationSec != null && (
+                                    <>
+                                      <span>Window ends (pattern + 2 bars):</span>
+                                      <span>
+                                        {formatTime(
+                                          t.setup.periodEnd + t.setup.barDurationSec * 2
+                                        )}
+                                      </span>
+                                    </>
+                                  )}
                                   <span>TP Long:</span>
                                   <span className="text-green-600">${formatPrice(t.setup.tpLong)}</span>
                                   <span>TP Short:</span>
@@ -876,14 +894,13 @@ export default function TradePage() {
                                 {t.exitReason === 'time' && t.entryTime != null && (
                                   <div className="mt-2 space-y-1 text-gray-600">
                                     <p>
-                                      Intended management window:{' '}
-                                      {Math.floor(timeWindowSecFromClosedTrade(t) / 60)} minutes after
-                                      entry (~
-                                      {formatTime(t.entryTime + timeWindowSecFromClosedTrade(t))}).
+                                      Management window ends at{' '}
+                                      {formatTime(tradeManagementWindowEndUnix(t))} (pattern period
+                                      end + 2 bar lengths; not from entry execution).
                                       Actual hold:{' '}
                                       {formatHoldDuration(t.entryTime, t.exitTime)}.
                                     </p>
-                                    {t.exitTime - t.entryTime > timeWindowSecFromClosedTrade(t) + 60 ? (
+                                    {t.exitTime > tradeManagementWindowEndUnix(t) + 60 ? (
                                       <p className="text-amber-800">
                                         This exit was <strong>delayed</strong>: the simulator only
                                         closes on a new price tick. If the tab was in the background,

@@ -25,7 +25,7 @@ The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars
 - **Short trigger:** Price breaks below inside bar low
 - **TP:** Entry ± range (high + range for long, low - range for short)
 - **Stop & reverse:** Opposite level break; max 2 stop events per setup
-- **Time exit:** **2× bar length** from entry (e.g. 10m for 5m bars, 20m for 10m bars, 2h for 60m bars) if TP/stop not hit
+- **Time exit:** Window ends at **pattern candle close + 2× bar length** (not from entry time). E.g. 60m pattern that closes at 21:00 UTC → window ends 23:00 UTC even if you enter at 21:25. After that window, the bot is idle and can detect the next pattern (including an inside bar on the next period).
 
 ## Phase 2 (Current)
 

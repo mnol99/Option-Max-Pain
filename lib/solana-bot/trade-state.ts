@@ -22,10 +22,27 @@ const FEE_MIN_BPS = 20;
  */
 export const POSITION_MANAGEMENT_SEC = 600;
 
-/** Time exit window = 2 × bar length (one bar to manage the trade). */
+/** Duration of management window (seconds): 2 × bar length. */
 export function timeWindowSecFromSetup(setup: PatternSetup): number {
   const bar = setup.barDurationSec > 0 ? setup.barDurationSec : 300;
   return bar * 2;
+}
+
+/**
+ * Absolute unix time when management must end: pattern candle close (periodEnd) + 2 bars.
+ * Not tied to entry execution time — e.g. 60m: pattern ends 21:00 → window ends 23:00.
+ */
+export function managementWindowEndFromSetup(setup: PatternSetup): number {
+  const bar = setup.barDurationSec > 0 ? setup.barDurationSec : 300;
+  return setup.periodEnd + bar * 2;
+}
+
+/** For audit rows when only ClosedTrade.setup is available */
+export function managementWindowEndFromClosedTradeSetup(
+  setup: ClosedTrade['setup']
+): number | null {
+  if (!setup?.periodEnd || !setup.barDurationSec) return null;
+  return setup.periodEnd + setup.barDurationSec * 2;
 }
 
 /** Jupiter Perps taker fee (approx.); used for performance “total cost” estimate */
@@ -92,7 +109,7 @@ export function enterLong(
     position: 'long',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + tw,
+    windowEnd: managementWindowEndFromSetup(state.setup),
     timeWindowSec: tw,
     stopEventCount: 0,
   };
@@ -111,7 +128,7 @@ export function enterShort(
     position: 'short',
     entryPrice: price,
     entryTime: timestamp,
-    windowEnd: timestamp + tw,
+    windowEnd: managementWindowEndFromSetup(state.setup),
     timeWindowSec: tw,
     stopEventCount: 0,
   };
@@ -144,6 +161,7 @@ export function checkPositionExit(
     tpShort: setup.tpShort,
     candleUnixTime: setup.candleUnixTime,
     barDurationSec: setup.barDurationSec,
+    periodEnd: setup.periodEnd,
   };
 
   // Time exit
@@ -240,7 +258,7 @@ export function checkPositionExit(
           position: 'short',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + tw,
+          windowEnd: state.windowEnd,
           timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
@@ -308,7 +326,7 @@ export function checkPositionExit(
           position: 'long',
           entryPrice: price,
           entryTime: timestamp,
-          windowEnd: timestamp + tw,
+          windowEnd: state.windowEnd,
           timeWindowSec: tw,
           stopEventCount: stopEventCount + 1,
         },
@@ -343,6 +361,7 @@ export function checkReversedExit(
     tpShort: setup.tpShort,
     candleUnixTime: setup.candleUnixTime,
     barDurationSec: setup.barDurationSec,
+    periodEnd: setup.periodEnd,
   };
 
   // Circuit breaker: max 2 stop events
