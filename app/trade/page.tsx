@@ -253,8 +253,28 @@ export default function TradePage() {
         if (!st) continue;
         if (st.status !== 'idle' && st.status !== 'stopped' && st.status !== 'pattern_detected')
           continue;
+
         const setup = detectPattern(c, s.intervalSec);
-        if (!setup || setup.candleUnixTime === st.lastTradedCandleUnixTime) continue;
+        const sameCandleAlreadyTraded =
+          setup != null &&
+          st.lastTradedCandleUnixTime != null &&
+          setup.candleUnixTime === st.lastTradedCandleUnixTime;
+
+        // No longer a valid pattern, or same inside bar we already traded — drop stale "pattern detected"
+        if (!setup || sameCandleAlreadyTraded) {
+          if (st.status === 'pattern_detected') {
+            if (!changed) {
+              next = { ...prev };
+              changed = true;
+            }
+            next[s.id] = {
+              ...createInitialState(),
+              lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+            };
+          }
+          continue;
+        }
+
         const isDoubleInside =
           st.status === 'pattern_detected' &&
           st.setup &&
