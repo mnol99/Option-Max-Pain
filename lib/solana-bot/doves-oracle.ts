@@ -20,23 +20,51 @@ function getConnection(): Connection {
   return new Connection(rpc || 'https://api.mainnet-beta.solana.com', 'confirmed');
 }
 
-/**
- * Fetch current SOL/USD price from Doves oracle (Jupiter Perps feed)
- */
-export async function fetchDovesPrice(): Promise<{ price: number; timestamp: number }> {
-  const connection = getConnection();
-  const accountInfo = await connection.getAccountInfo(SOL_PRICE_FEED, 'processed');
-  if (!accountInfo?.data || accountInfo.data.length < TIMESTAMP_OFFSET + 8) {
-    throw new Error('Doves oracle: invalid or missing SOL price feed account');
-  }
+/** Coalesce RPC reads: public RPCs rate-limit repeated getAccountInfo on the same account. */
+const MIN_FETCH_INTERVAL_MS = Number(process.env.DOVES_MIN_FETCH_INTERVAL_MS) || 5000;
+/** When RPC returns 429, reuse last good price if younger than this (ms). */
+const STALE_OK_MS = Number(process.env.DOVES_STALE_CACHE_MS) || 120000;
 
-  const data = accountInfo.data;
+let lastFetch: { price: number; timestamp: number; wallMs: number } | null = null;
+
+function decodePrice(data: Buffer): { price: number; timestamp: number } {
   const priceRaw = data.readBigUInt64LE(PRICE_OFFSET);
   const expo = data.readInt8(EXPO_OFFSET);
   const timestamp = Number(data.readBigInt64LE(TIMESTAMP_OFFSET));
-
-  // price (u64) * 10^expo = USD value (expo is typically negative, e.g. -9)
   const price = Number(priceRaw) * Math.pow(10, expo);
-
   return { price, timestamp };
+}
+
+/**
+ * Fetch current SOL/USD price from Doves oracle (Jupiter Perps feed).
+ * Uses in-memory throttling + stale fallback on 429 to avoid public RPC limits.
+ */
+export async function fetchDovesPrice(): Promise<{ price: number; timestamp: number }> {
+  const now = Date.now();
+  if (lastFetch && now - lastFetch.wallMs < MIN_FETCH_INTERVAL_MS) {
+    return { price: lastFetch.price, timestamp: lastFetch.timestamp };
+  }
+
+  const connection = getConnection();
+  try {
+    const accountInfo = await connection.getAccountInfo(SOL_PRICE_FEED, 'processed');
+    if (!accountInfo?.data || accountInfo.data.length < TIMESTAMP_OFFSET + 8) {
+      throw new Error('Doves oracle: invalid or missing SOL price feed account');
+    }
+    const { price, timestamp } = decodePrice(accountInfo.data);
+    lastFetch = { price, timestamp, wallMs: now };
+    return { price, timestamp };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const is429 = msg.includes('429') || msg.includes('Too many requests');
+    if (is429 && lastFetch && now - lastFetch.wallMs < STALE_OK_MS) {
+      return { price: lastFetch.price, timestamp: lastFetch.timestamp };
+    }
+    if (is429) {
+      throw new Error(
+        'Solana RPC rate limit (429) reading Doves oracle. Set NEXT_PUBLIC_SOLANA_RPC to a dedicated provider (Helius, QuickNode, etc.) in .env.local, or wait and refresh.'
+      );
+    }
+    throw e;
+  }
 }

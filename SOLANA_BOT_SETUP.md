@@ -6,7 +6,8 @@ The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars
 
 1. **Data source: Jupiter Perps (Doves oracle)**
    - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
-   - No API keys needed for data; uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`)
+   - Uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`). **Public RPCs often return 429** if too many reads hit the same oracle account—use a **free tier from Helius, QuickNode, etc.** Doves reads are throttled in code (~5s min between fetches) with a short stale cache on 429.
+   - Optional: `DOVES_MIN_FETCH_INTERVAL_MS` (default 5000), `DOVES_STALE_CACHE_MS` (default 120000).
    - Candles are built by polling Doves every 15s; first pattern available ~20 min after bot starts
 
 2. **Run the app**
