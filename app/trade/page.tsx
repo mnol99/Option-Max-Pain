@@ -1,15 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import dynamic from 'next/dynamic';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { VersionedTransaction } from '@solana/web3.js';
-
-const WalletMultiButton = dynamic(
-  () =>
-    import('@solana/wallet-adapter-react-ui').then((mod) => mod.WalletMultiButton),
-  { ssr: false }
-);
 import { detectPattern, isBreakoutLong, isBreakoutShort } from '@/lib/solana-bot/pattern-engine';
 import {
   createInitialState,
@@ -432,47 +426,7 @@ export default function TradePage() {
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="container mx-auto px-4 py-4">
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-            <h1 className="text-2xl font-bold text-gray-900">SOL Trading Bot</h1>
-            <div className="flex items-center gap-4">
-              {connected && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600">Mode:</span>
-                  <button
-                    type="button"
-                    onClick={() => setLiveMode(false)}
-                    className={`px-3 py-1 rounded text-sm font-medium ${
-                      !liveMode ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    Paper
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLiveMode(true)}
-                    className={`px-3 py-1 rounded text-sm font-medium ${
-                      liveMode ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    Live
-                  </button>
-                </div>
-              )}
-              {mounted && <WalletMultiButton />}
-              <nav className="flex gap-2">
-                <a href="/" className="text-sm text-gray-600 hover:text-gray-900">
-                  Option Max Pain
-                </a>
-                <span className="text-sm text-gray-400">|</span>
-                <span className="text-sm font-medium text-primary-600">Trade</span>
-                <span className="text-sm text-gray-400">|</span>
-                <a href="/backtest" className="text-sm text-gray-600 hover:text-gray-900">
-                  Backtest
-                </a>
-              </nav>
-            </div>
-            </div>
-            <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+            <div className="flex flex-wrap gap-2 items-center border-b border-gray-100 pb-3">
               <span className="text-xs text-gray-500 self-center mr-1">Strategy:</span>
               {TRADE_STRATEGIES.map((s) => (
                 <button
@@ -488,6 +442,46 @@ export default function TradePage() {
                   {s.label}
                 </button>
               ))}
+            </div>
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <h1 className="text-2xl font-bold text-gray-900">SOL Trading Bot</h1>
+              <div className="flex items-center gap-4">
+                {connected && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Mode:</span>
+                    <button
+                      type="button"
+                      onClick={() => setLiveMode(false)}
+                      className={`px-3 py-1 rounded text-sm font-medium ${
+                        !liveMode ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      Paper
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLiveMode(true)}
+                      className={`px-3 py-1 rounded text-sm font-medium ${
+                        liveMode ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      Live
+                    </button>
+                  </div>
+                )}
+                {mounted && <WalletMultiButton />}
+                <nav className="flex gap-2">
+                  <a href="/" className="text-sm text-gray-600 hover:text-gray-900">
+                    Option Max Pain
+                  </a>
+                  <span className="text-sm text-gray-400">|</span>
+                  <span className="text-sm font-medium text-primary-600">Trade</span>
+                  <span className="text-sm text-gray-400">|</span>
+                  <a href="/backtest" className="text-sm text-gray-600 hover:text-gray-900">
+                    Backtest
+                  </a>
+                </nav>
+              </div>
             </div>
           </div>
         </div>
