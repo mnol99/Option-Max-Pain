@@ -1,17 +1,28 @@
-import { NextResponse } from 'next/server';
-import { fetchPythPrice } from '@/lib/solana-bot/pyth-price';
+import { NextRequest, NextResponse } from 'next/server';
+import { fetchPythPrice, fetchPythBtcPrice } from '@/lib/solana-bot/pyth-price';
 import { fetchDovesPrice } from '@/lib/solana-bot/doves-oracle';
 
 /** Use Doves (Jupiter Perps) by default - matches execution. Set to "pyth" for Pyth/aggregator price. */
 const PRICE_SOURCE = process.env.SOLANA_PRICE_SOURCE || 'doves';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const fetcher = PRICE_SOURCE === 'doves' ? fetchDovesPrice : fetchPythPrice;
-    const { price, timestamp } = await fetcher();
+    const asset = req.nextUrl.searchParams.get('asset') || 'sol';
+    let price: number;
+    let timestamp: number;
+    if (asset === 'btc') {
+      const r = await fetchPythBtcPrice();
+      price = r.price;
+      timestamp = r.timestamp;
+    } else {
+      const fetcher = PRICE_SOURCE === 'doves' ? fetchDovesPrice : fetchPythPrice;
+      const r = await fetcher();
+      price = r.price;
+      timestamp = r.timestamp;
+    }
     return NextResponse.json({
       success: true,
-      data: { price, timestamp },
+      data: { price, timestamp, asset: asset === 'btc' ? 'btc' : 'sol' },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

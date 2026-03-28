@@ -480,6 +480,10 @@ export default function TradePage() {
                   <a href="/backtest" className="text-sm text-gray-600 hover:text-gray-900">
                     Backtest
                   </a>
+                  <span className="text-sm text-gray-400">|</span>
+                  <a href="/ibit" className="text-sm text-gray-600 hover:text-gray-900">
+                    IBIT
+                  </a>
                 </nav>
               </div>
             </div>

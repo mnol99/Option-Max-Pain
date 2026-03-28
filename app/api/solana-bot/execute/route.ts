@@ -26,8 +26,10 @@ import {
   JUPITER_PERPETUALS_EVENT_AUTHORITY,
   JLP_POOL_ACCOUNT_PUBKEY,
   CUSTODY_SOL,
+  CUSTODY_BTC,
   CUSTODY_USDC,
   USDC_MINT,
+  WBTC_MINT,
   getPositionPda,
   getPositionRequestPda,
   getPerpetualsPda,
@@ -39,6 +41,7 @@ import minimalIdl from '@/lib/solana-bot/idl/jupiter-perps-minimal.json';
 const USD_SCALE = 1_000_000;
 const USDC_DECIMALS = 6;
 const SOL_DECIMALS = 9;
+const WBTC_DECIMALS = 8;
 
 export async function POST(req: NextRequest) {
   try {
@@ -49,12 +52,16 @@ export async function POST(req: NextRequest) {
       sizeUsd = 100,
       leverage = 1.5,
       solPrice,
+      btcPrice,
+      asset = 'sol',
     } = body as {
       side: 'long' | 'short';
       owner: string;
       sizeUsd?: number;
       leverage?: number;
       solPrice?: number;
+      btcPrice?: number;
+      asset?: 'sol' | 'btc';
     };
 
     if (!ownerStr || !side || !['long', 'short'].includes(side)) {
@@ -79,9 +86,12 @@ export async function POST(req: NextRequest) {
       provider
     );
 
-    const custody = CUSTODY_SOL;
-    const collateralCustody = side === 'short' ? CUSTODY_USDC : CUSTODY_SOL;
-    const inputMint = side === 'short' ? USDC_MINT : NATIVE_MINT;
+    const useBtc = asset === 'btc';
+    const custody = useBtc ? CUSTODY_BTC : CUSTODY_SOL;
+    const collateralCustody =
+      side === 'short' ? CUSTODY_USDC : useBtc ? CUSTODY_BTC : CUSTODY_SOL;
+    const inputMint =
+      side === 'short' ? USDC_MINT : useBtc ? WBTC_MINT : NATIVE_MINT;
 
     const position = getPositionPda(owner, custody, collateralCustody, side);
     const counter = BigInt(Math.floor(Math.random() * 1_000_000_000));
@@ -101,10 +111,21 @@ export async function POST(req: NextRequest) {
       collateralTokenDelta = new BN(
         Math.floor(collateralUsd * Math.pow(10, USDC_DECIMALS))
       );
+    } else if (useBtc) {
+      if (!btcPrice || btcPrice <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'btcPrice required for long BTC positions' },
+          { status: 400 }
+        );
+      }
+      const collateralBtc = collateralUsd / btcPrice;
+      collateralTokenDelta = new BN(
+        Math.floor(collateralBtc * Math.pow(10, WBTC_DECIMALS))
+      );
     } else {
       if (!solPrice || solPrice <= 0) {
         return NextResponse.json(
-          { success: false, error: 'solPrice required for long positions' },
+          { success: false, error: 'solPrice required for long SOL positions' },
           { status: 400 }
         );
       }
@@ -138,6 +159,15 @@ export async function POST(req: NextRequest) {
       preInstructions.push(createSyncNativeInstruction(fundingAccount));
       postInstructions.push(
         createCloseAccountInstruction(fundingAccount, owner, owner)
+      );
+    } else if (inputMint.equals(WBTC_MINT)) {
+      preInstructions.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          owner,
+          fundingAccount,
+          owner,
+          WBTC_MINT
+        )
       );
     }
 
@@ -187,7 +217,7 @@ export async function POST(req: NextRequest) {
 
     const tx = new VersionedTransaction(txMessage);
     const serialized = Buffer.from(tx.serialize()).toString('base64');
-    return NextResponse.json({ success: true, data: { serializedTx } });
+    return NextResponse.json({ success: true, data: { serializedTx: serialized } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Execute error:', msg);

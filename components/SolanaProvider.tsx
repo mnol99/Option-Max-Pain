@@ -12,6 +12,11 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 
 const SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || clusterApiUrl('mainnet-beta');
 
+const ConnectionProviderCompat = ConnectionProvider as unknown as FC<{
+  endpoint: string;
+  children?: ReactNode;
+}>;
+
 export const SolanaProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const wallets = useMemo(
     () => [new SolflareWalletAdapter()],
@@ -19,10 +24,10 @@ export const SolanaProvider: FC<{ children: ReactNode }> = ({ children }) => {
   );
 
   return (
-    <ConnectionProvider endpoint={SOLANA_RPC}>
+    <ConnectionProviderCompat endpoint={SOLANA_RPC}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>
-    </ConnectionProvider>
+    </ConnectionProviderCompat>
   );
 };
