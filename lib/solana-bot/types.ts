@@ -80,6 +80,9 @@ export interface ClosedTrade {
   pnlUsd?: number;
   /** SOL notional size (positionSizeUsd / entryPrice) */
   solAmount?: number;
+  /** BLK / BTC paper: BTC notional */
+  btcAmount?: number;
+  asset?: 'sol' | 'btc';
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,

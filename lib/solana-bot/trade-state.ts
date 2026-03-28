@@ -49,6 +49,9 @@ export function managementWindowEndFromClosedTradeSetup(
 export const JUPITER_PERPS_EST_FEE_BPS_PER_SIDE = 6;
 
 function closedTradeNotionalUsd(t: ClosedTrade): number {
+  if (t.asset === 'btc' && t.btcAmount != null && t.entryPrice > 0) {
+    return t.btcAmount * t.entryPrice;
+  }
   if (t.solAmount != null && t.entryPrice > 0) {
     return t.solAmount * t.entryPrice;
   }
@@ -134,7 +137,7 @@ export function enterShort(
   };
 }
 
-function newTradeId(): string {
+export function newTradeId(): string {
   return `trade-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 

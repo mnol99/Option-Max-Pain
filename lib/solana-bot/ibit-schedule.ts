@@ -42,6 +42,18 @@ export function getCoverScheduleUtc(anchorUtc: Date): Date[] {
   return slots;
 }
 
+/** BLK paper: 18 slots 10:00–12:50 ET (every 10m), same calendar day as anchor. */
+export const BLK_COVER_SLOT_COUNT = 18;
+
+export function getBlkCoverScheduleUtc(anchorUtc: Date): Date[] {
+  const y = etYearMonthDay(anchorUtc);
+  const slots: Date[] = [];
+  for (let i = 0; i < BLK_COVER_SLOT_COUNT; i++) {
+    slots.push(etLocalToUtc(y.year, y.month, y.day, 10, i * 10));
+  }
+  return slots;
+}
+
 function getEtParts(d: Date): { hour: number; minute: number; second: number } {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: IBIT_TZ,

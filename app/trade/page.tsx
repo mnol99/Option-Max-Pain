@@ -21,8 +21,21 @@ import {
   managementWindowEndFromClosedTradeSetup,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
-import { TRADE_STRATEGIES, defaultStrategyId } from '@/lib/solana-bot/strategy-tabs';
+import {
+  TRADE_STRATEGIES,
+  INSIDE_BAR_STRATEGIES,
+  defaultStrategyId,
+} from '@/lib/solana-bot/strategy-tabs';
 import { intervalLabel } from '@/lib/solana-bot/candle-intervals';
+import {
+  BLK_STRATEGY_ID,
+  BLK_COVER_SLICES,
+  BLK_DEFAULT_NOTIONAL_USD,
+  createBlkInitialState,
+  createBlkShortOpenState,
+  processBlkPaperTick,
+  type BlkPaperState,
+} from '@/lib/solana-bot/blk-paper';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
@@ -70,6 +83,10 @@ function emptyTradesMap(): Record<string, ClosedTrade[]> {
   return Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, [] as ClosedTrade[]]));
 }
 
+function initialInsideStateMap(): Record<string, TradeState> {
+  return Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, createInitialState()]));
+}
+
 export default function TradePage() {
   const { publicKey, connected, wallet } = useWallet();
   const { connection } = useConnection();
@@ -79,21 +96,21 @@ export default function TradePage() {
   const [breakoutByStrategy, setBreakoutByStrategy] = useState<
     Record<string, { long: number; short: number }>
   >(() =>
-    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
+    Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
   );
-  const [stateByStrategy, setStateByStrategy] = useState<Record<string, TradeState>>(() =>
-    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, createInitialState()]))
+  const [stateByStrategy, setStateByStrategy] = useState<Record<string, TradeState>>(
+    initialInsideStateMap
   );
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
-  const [candlesByStrategy, setCandlesByStrategy] = useState<
-    Record<string, OHLCVCandle[]>
-  >(() => Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, []])));
+  const [candlesByStrategy, setCandlesByStrategy] = useState<Record<string, OHLCVCandle[]>>(
+    () => Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, []]))
+  );
   const [tradesByStrategy, setTradesByStrategy] = useState<Record<string, ClosedTrade[]>>(
     emptyTradesMap
   );
-  const [warmupByStrategy, setWarmupByStrategy] = useState<Record<string, number>>(() =>
-    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, 0]))
+  const [warmupByStrategy, setWarmupByStrategy] = useState<Record<string, number>>(
+    () => Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, 0]))
   );
   const [error, setError] = useState<string | null>(null);
   const [liveMode, setLiveMode] = useState(false);
@@ -107,12 +124,19 @@ export default function TradePage() {
     Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, 1000]))
   );
   const enteringRef = useRef<Record<string, boolean>>(
-    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, false]))
+    Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, false]))
   );
   const stateByStrategyRef = useRef(stateByStrategy);
   const breakoutRef = useRef<Record<string, { long: number; short: number }>>(
-    Object.fromEntries(TRADE_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
+    Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
   );
+
+  const [blkPaperState, setBlkPaperState] = useState<BlkPaperState>(createBlkInitialState);
+  const blkPaperStateRef = useRef(blkPaperState);
+  blkPaperStateRef.current = blkPaperState;
+  const blkProcessedSignalsRef = useRef<Set<string>>(new Set());
+  const [btcPrice, setBtcPrice] = useState<number | null>(null);
+  const [btcTime, setBtcTime] = useState<number | null>(null);
 
   useEffect(() => {
     stateByStrategyRef.current = stateByStrategy;
@@ -120,6 +144,7 @@ export default function TradePage() {
 
   const activeDef = TRADE_STRATEGIES.find((s) => s.id === activeStrategyId) ?? TRADE_STRATEGIES[0];
   const activeIntervalSec = activeDef.intervalSec;
+  const isBlkTab = activeDef.kind === 'blk';
   const state = stateByStrategy[activeStrategyId] ?? createInitialState();
   const candles = candlesByStrategy[activeStrategyId] ?? [];
   const trades = tradesByStrategy[activeStrategyId] ?? [];
@@ -168,7 +193,84 @@ export default function TradePage() {
     for (const s of TRADE_STRATEGIES) {
       liveAmountByStrategyRef.current[s.id] = liveAmountToRun;
     }
+    liveAmountByStrategyRef.current[BLK_STRATEGY_ID] = BLK_DEFAULT_NOTIONAL_USD;
   }, [liveAmountToRun]);
+
+  const fetchBtcPrice = useCallback(async () => {
+    try {
+      const res = await fetch('/api/solana-bot/price?asset=btc');
+      const json = await res.json();
+      if (json.success && json.data?.price != null) {
+        setBtcPrice(json.data.price);
+        setBtcTime(json.data.timestamp ?? Math.floor(Date.now() / 1000));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBtcPrice();
+    const id = setInterval(fetchBtcPrice, 2000);
+    return () => clearInterval(id);
+  }, [fetchBtcPrice]);
+
+  /** IBIT poll → paper short $1k BTC when signal (paper only). */
+  useEffect(() => {
+    if (liveMode || btcPrice == null || btcPrice <= 0) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const res = await fetch('/api/solana-bot/ibit/poll');
+        const json = await res.json();
+        if (!json.success || !json.data?.signals || cancelled) return;
+        const signals = json.data.signals as Array<{ txid: string; blockTime: number }>;
+        const price = btcPrice;
+        setBlkPaperState((prev) => {
+          if (prev.status !== 'idle') return prev;
+          for (const sig of signals) {
+            if (blkProcessedSignalsRef.current.has(sig.txid)) continue;
+            blkProcessedSignalsRef.current.add(sig.txid);
+            const t = sig.blockTime > 0 ? sig.blockTime : Math.floor(Date.now() / 1000);
+            return createBlkShortOpenState(price, t, sig.txid, BLK_DEFAULT_NOTIONAL_USD);
+          }
+          return prev;
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    run();
+    const id = setInterval(run, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [liveMode, btcPrice]);
+
+  /** BLK paper: cover slices on BTC ticks. */
+  useEffect(() => {
+    if (liveMode || btcPrice == null || btcTime == null) return;
+    const prev = blkPaperStateRef.current;
+    const { state: next, closedTrade } = processBlkPaperTick(prev, btcPrice, btcTime);
+    if (next !== prev) setBlkPaperState(next);
+    if (closedTrade) {
+      const notional =
+        closedTrade.pnlUsd != null && Math.abs(closedTrade.pnlPercent) > 1e-8
+          ? closedTrade.pnlUsd! / (closedTrade.pnlPercent / 100)
+          : BLK_DEFAULT_NOTIONAL_USD;
+      const enriched: ClosedTrade = {
+        ...closedTrade,
+        pnlUsd: closedTrade.pnlUsd,
+        btcAmount: notional / closedTrade.entryPrice,
+        asset: 'btc',
+      };
+      setTradesByStrategy((p) => ({
+        ...p,
+        [BLK_STRATEGY_ID]: [enriched, ...(p[BLK_STRATEGY_ID] ?? [])],
+      }));
+    }
+  }, [btcPrice, btcTime, liveMode]);
 
   const fetchPrice = useCallback(async () => {
     try {
@@ -189,7 +291,7 @@ export default function TradePage() {
   const fetchOHLCV = useCallback(async () => {
     try {
       const results = await Promise.all(
-        TRADE_STRATEGIES.map(async (s) => {
+        INSIDE_BAR_STRATEGIES.map(async (s) => {
           const res = await fetch(`/api/solana-bot/ohlcv?interval=${s.intervalSec}`);
           const json = await res.json();
           return { id: s.id, json };
@@ -207,7 +309,10 @@ export default function TradePage() {
       setWarmupByStrategy((prev) => ({ ...prev, ...nextWarmup }));
       setError(null);
       if (useChartPrice) {
-        const chartCandles = nextCandles[activeStrategyId];
+        const chartId =
+          INSIDE_BAR_STRATEGIES.find((s) => s.id === activeStrategyId)?.id ??
+          INSIDE_BAR_STRATEGIES[0].id;
+        const chartCandles = nextCandles[chartId];
         if (chartCandles && chartCandles.length > 0) {
           setPrice(chartCandles[0].close);
           setPriceTime(Math.floor(Date.now() / 1000));
@@ -240,7 +345,7 @@ export default function TradePage() {
     setStateByStrategy((prev) => {
       let next = prev;
       let changed = false;
-      for (const s of TRADE_STRATEGIES) {
+      for (const s of INSIDE_BAR_STRATEGIES) {
         const c = candlesByStrategy[s.id] ?? [];
         if (c.length < 4) continue;
         const st = prev[s.id];
@@ -290,7 +395,7 @@ export default function TradePage() {
   // Price polling — fast if ANY strategy needs it
   useEffect(() => {
     if (useChartPrice) return;
-    const anyActive = TRADE_STRATEGIES.some((s) => {
+    const anyActive = INSIDE_BAR_STRATEGIES.some((s) => {
       const st = stateByStrategy[s.id];
       return (
         st?.status === 'pattern_detected' ||
@@ -319,7 +424,7 @@ export default function TradePage() {
         solAmount: positionSize / closedTrade.entryPrice,
       }));
 
-    for (const s of TRADE_STRATEGIES) {
+    for (const s of INSIDE_BAR_STRATEGIES) {
       const sid = s.id;
       let st = state[sid];
       if (!st) continue;
@@ -400,7 +505,7 @@ export default function TradePage() {
 
     setBreakoutByStrategy(() => {
       const n: Record<string, { long: number; short: number }> = {};
-      for (const s of TRADE_STRATEGIES) {
+      for (const s of INSIDE_BAR_STRATEGIES) {
         n[s.id] = { ...breakoutRef.current[s.id] };
       }
       return n;
@@ -415,11 +520,14 @@ export default function TradePage() {
     liveAmountToRun,
   ]);
 
-  const metrics = computeMetrics(trades);
-  const totalPnlAllStrategies = TRADE_STRATEGIES.reduce(
-    (sum, s) => sum + computeMetrics(tradesByStrategy[s.id] ?? []).totalPnl,
-    0
-  );
+  const blkTrades = tradesByStrategy[BLK_STRATEGY_ID] ?? [];
+  const blkMetrics = computeMetrics(blkTrades);
+  const metrics = isBlkTab ? blkMetrics : computeMetrics(trades);
+  const totalPnlAllStrategies =
+    INSIDE_BAR_STRATEGIES.reduce(
+      (sum, s) => sum + computeMetrics(tradesByStrategy[s.id] ?? []).totalPnl,
+      0
+    ) + blkMetrics.totalPnl;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -493,11 +601,23 @@ export default function TradePage() {
 
       <main className="container mx-auto px-4 py-8">
         <p className="text-sm text-gray-600 mb-4">
-          Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
-          Each tab keeps its own state, trade log, and performance ($
-          {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode).
+          {isBlkTab ? (
+            <>
+              <span className="font-semibold">BLK</span> — paper IBIT → short{' '}
+              ${BLK_DEFAULT_NOTIONAL_USD.toFixed(0)} BTC notional, covers{' '}
+              <span className="font-semibold">10:00–12:50 ET</span> ({BLK_COVER_SLICES} × 10m). Uses
+              Pyth BTC price. Signals from <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code>{' '}
+              (paper mode only).
+            </>
+          ) : (
+            <>
+              Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
+              Each tab keeps its own state, trade log, and performance ($
+              {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode).
+            </>
+          )}
         </p>
-        {warmupMinutes > 0 && candles.length < 4 && (
+        {!isBlkTab && warmupMinutes > 0 && candles.length < 4 && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
             <p className="text-amber-800 font-medium">Building candle data from Jupiter Perps</p>
             <p className="text-amber-700 text-sm mt-1">
@@ -606,80 +726,127 @@ export default function TradePage() {
           <div className="space-y-6">
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Status & Monitoring</h2>
-              <div className="space-y-4">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Status</span>
-                  <span
-                    className={`font-medium px-2 py-0.5 rounded ${
-                      state.status === 'idle'
-                        ? 'bg-gray-100'
-                        : state.status === 'pattern_detected'
-                        ? 'bg-amber-100 text-amber-800'
-                        : state.status === 'in_position' || state.status === 'reversed'
-                        ? 'bg-primary-100 text-primary-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}
-                  >
-                    {state.status.replace('_', ' ')}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">SOL Price (last candle)</span>
-                  <span className="font-mono font-medium">
-                    {candles.length > 0 ? `$${formatPrice(candles[0].close)}` : '—'}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500">
-                  Jupiter Perps — last {intervalLabel(activeIntervalSec)} close
-                </p>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">SOL Price (live)</span>
-                  <span className="font-mono font-medium">
-                    {price != null ? `$${formatPrice(price)}` : '—'}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500">
-                  Jupiter Perps (Doves) — matches execution
-                </p>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useChartPrice}
-                    onChange={(e) => setUseChartPrice(e.target.checked)}
-                    className="rounded"
-                  />
-                  <span className="text-sm text-gray-600">
-                    Use chart price for breakouts (last {intervalLabel(activeIntervalSec)} close)
-                  </span>
-                </label>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Position</span>
-                  <span className="font-medium">
-                    {state.position ? (
-                      <span className={state.position === 'long' ? 'text-green-600' : 'text-red-600'}>
-                        {state.position.toUpperCase()}
-                      </span>
-                    ) : (
-                      '—'
-                    )}
-                  </span>
-                </div>
-                {state.entryPrice != null && (
+              {isBlkTab ? (
+                <div className="space-y-4 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Entry</span>
-                    <span className="font-mono">${formatPrice(state.entryPrice)}</span>
+                    <span className="text-gray-600">BLK status</span>
+                    <span
+                      className={`font-medium px-2 py-0.5 rounded ${
+                        blkPaperState.status === 'idle' ? 'bg-gray-100' : 'bg-primary-100 text-primary-800'
+                      }`}
+                    >
+                      {blkPaperState.status === 'idle' ? 'idle (watching IBIT)' : 'short open (covering)'}
+                    </span>
                   </div>
-                )}
-                {state.windowEnd != null && (
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Window ends</span>
-                    <span className="font-mono">{formatTime(state.windowEnd)}</span>
+                    <span className="text-gray-600">BTC (Pyth)</span>
+                    <span className="font-mono font-medium">
+                      {btcPrice != null ? `$${formatPrice(btcPrice)}` : '—'}
+                    </span>
                   </div>
-                )}
-              </div>
+                  {blkPaperState.status === 'short_open' && blkPaperState.entryBtc != null && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Short entry</span>
+                        <span className="font-mono">${formatPrice(blkPaperState.entryBtc)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Notional</span>
+                        <span className="font-mono">${blkPaperState.notionalUsd.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Cover progress</span>
+                        <span className="font-mono">
+                          {blkPaperState.nextSliceIndex}/{BLK_COVER_SLICES} slices (10:00–12:50 ET)
+                        </span>
+                      </div>
+                      {blkPaperState.signalTxid && (
+                        <p className="text-xs text-gray-500 break-all">
+                          Signal tx: {blkPaperState.signalTxid}
+                        </p>
+                      )}
+                    </>
+                  )}
+                  <p className="text-xs text-gray-500">
+                    Paper only. Live mode does not auto-trade BLK here.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Status</span>
+                    <span
+                      className={`font-medium px-2 py-0.5 rounded ${
+                        state.status === 'idle'
+                          ? 'bg-gray-100'
+                          : state.status === 'pattern_detected'
+                          ? 'bg-amber-100 text-amber-800'
+                          : state.status === 'in_position' || state.status === 'reversed'
+                          ? 'bg-primary-100 text-primary-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}
+                    >
+                      {state.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">SOL Price (last candle)</span>
+                    <span className="font-mono font-medium">
+                      {candles.length > 0 ? `$${formatPrice(candles[0].close)}` : '—'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Jupiter Perps — last {intervalLabel(activeIntervalSec)} close
+                  </p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">SOL Price (live)</span>
+                    <span className="font-mono font-medium">
+                      {price != null ? `$${formatPrice(price)}` : '—'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Jupiter Perps (Doves) — matches execution
+                  </p>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useChartPrice}
+                      onChange={(e) => setUseChartPrice(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span className="text-sm text-gray-600">
+                      Use chart price for breakouts (last {intervalLabel(activeIntervalSec)} close)
+                    </span>
+                  </label>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Position</span>
+                    <span className="font-medium">
+                      {state.position ? (
+                        <span className={state.position === 'long' ? 'text-green-600' : 'text-red-600'}>
+                          {state.position.toUpperCase()}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </span>
+                  </div>
+                  {state.entryPrice != null && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Entry</span>
+                      <span className="font-mono">${formatPrice(state.entryPrice)}</span>
+                    </div>
+                  )}
+                  {state.windowEnd != null && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Window ends</span>
+                      <span className="font-mono">{formatTime(state.windowEnd)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
 
-            {state.setup && (
+            {!isBlkTab && state.setup && (
               <section className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Pattern Levels</h2>
                 {state.setup.candleUnixTime != null && (
@@ -779,8 +946,8 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade Log</h2>
-              <p className="text-xs text-gray-500 mb-3">
-                Entry: SOL amount @ price · time · Exit: price · time · PnL
+                  <p className="text-xs text-gray-500 mb-3">
+                Entry: {isBlkTab ? 'BTC' : 'SOL'} amount @ price · time · Exit: price · time · PnL
               </p>
               <div className="max-h-80 overflow-y-auto space-y-3">
                 {trades.length === 0 ? (
@@ -806,7 +973,7 @@ export default function TradePage() {
                           <span className="text-gray-600 font-medium">Entry:</span>
                           <span>
                             {t.solAmount != null
-                              ? `${t.solAmount.toFixed(4)} SOL`
+                              ? `${t.solAmount.toFixed(4)} ${t.asset === 'btc' ? 'BTC' : 'SOL'}`
                               : '—'}
                             {' @ $'}
                             <span className="font-mono">{formatPrice(t.entryPrice)}</span>
