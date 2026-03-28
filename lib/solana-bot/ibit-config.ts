@@ -105,8 +105,11 @@ export function getIbitMainOutMinBtc(): number {
   return 200;
 }
 
-export function getIbitMainOutMaxBtc(): number {
-  const n = Number(process.env.IBIT_MAIN_OUT_MAX_BTC);
+/** Optional upper bound on main deposit (BTC). Default: no cap (600, 900, 2700+ all pass). */
+export function getIbitMainOutMaxBtc(): number | null {
+  const raw = process.env.IBIT_MAIN_OUT_MAX_BTC?.trim();
+  if (raw === undefined || raw === '') return null;
+  const n = Number(raw);
   if (Number.isFinite(n) && n > 0) return n;
-  return 301;
+  return null;
 }

@@ -28,7 +28,7 @@ interface PollPayload {
     detectStartMinEt: number;
     detectEndMinEt: number;
     mainOutMinBtc: number;
-    mainOutMaxBtc: number;
+    mainOutMaxBtc: number | null;
   };
   signals: Array<{
     txid: string;
@@ -299,7 +299,8 @@ export default function IbitPage() {
           Monitors Bitcoin on-chain transfers from configured source addresses to your Coinbase Prime
           deposit addresses (Blockstream). By default, strict detection uses your sample:{' '}
           <strong>~06:00–07:45 ET</strong> block time, main output to the primary deposit in{' '}
-          <strong>~200–301 BTC</strong>, and same addresses as before. Multiple txs in the same
+          <strong>≥ ~200 BTC</strong> to the main deposit (no upper cap by default), and same
+          addresses as before. Multiple txs in the same
           block are grouped as one batch. On signal: short BTC perps; cover in{' '}
           <strong>25 slices 11:00–14:00 ET</strong>. Override via{' '}
           <code className="text-xs bg-gray-100 px-1 rounded">.env.local</code> (
@@ -327,8 +328,12 @@ export default function IbitPage() {
                 {poll.detection.strictFilters ? (
                   <>
                     Strict: block time ET {formatEtMin(poll.detection.detectStartMinEt)}–
-                    {formatEtMin(poll.detection.detectEndMinEt)}; main out{' '}
-                    {poll.detection.mainOutMinBtc}–{poll.detection.mainOutMaxBtc} BTC to{' '}
+                    {formatEtMin(poll.detection.detectEndMinEt)}; main out ≥{' '}
+                    {poll.detection.mainOutMinBtc} BTC
+                    {poll.detection.mainOutMaxBtc != null
+                      ? `, ≤ ${poll.detection.mainOutMaxBtc} BTC`
+                      : ' (no max)'}{' '}
+                    to{' '}
                     <span className="font-mono">{poll.detection.mainDepositAddress.slice(0, 12)}…</span>
                   </>
                 ) : (
@@ -512,8 +517,8 @@ export default function IbitPage() {
               day ET (default 360–465 = 06:00–07:45)
             </li>
             <li>
-              <code>IBIT_MAIN_OUT_MIN_BTC</code> / <code>IBIT_MAIN_OUT_MAX_BTC</code> — main deposit
-              size band (default 200–301)
+              <code>IBIT_MAIN_OUT_MIN_BTC</code> — minimum main deposit BTC (default 200); optional{' '}
+              <code>IBIT_MAIN_OUT_MAX_BTC</code> to cap (omit = no max, e.g. 600 or 2700 passes)
             </li>
             <li>
               <code>IBIT_MAIN_DEPOSIT_ADDRESS</code> — override primary deposit for the size band

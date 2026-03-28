@@ -64,8 +64,11 @@ function blockTimePassesFilter(blockTimeSec: number): boolean {
 
 function mainOutputPassesStrictBand(mainOutSats: number): boolean {
   const minSats = Math.floor(getIbitMainOutMinBtc() * 1e8);
-  const maxSats = Math.ceil(getIbitMainOutMaxBtc() * 1e8);
-  return mainOutSats >= minSats && mainOutSats <= maxSats;
+  if (mainOutSats < minSats) return false;
+  const maxBtc = getIbitMainOutMaxBtc();
+  if (maxBtc == null) return true;
+  const maxSats = Math.ceil(maxBtc * 1e8);
+  return mainOutSats <= maxSats;
 }
 
 function nowInActiveDetectWindow(): boolean {
@@ -91,7 +94,8 @@ export async function pollIbitTransfers(): Promise<{
     detectStartMinEt: number;
     detectEndMinEt: number;
     mainOutMinBtc: number;
-    mainOutMaxBtc: number;
+    /** null = no upper cap */
+    mainOutMaxBtc: number | null;
   };
   signals: IbitTransferSignal[];
   /** Same block_time → batch (multiple sends at once) */
