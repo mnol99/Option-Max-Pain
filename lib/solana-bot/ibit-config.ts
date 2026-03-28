@@ -13,6 +13,7 @@
  * - 94e39faac11ac1c0ef36a8030d0d80a982c3568b8f5a7a93a1754166ce7ab5ff
  * - cb7cd27eed747ea94ec18d4b98734dc6cb5eb0b52a123788a8c01ac4393b4479
  * - 7f6a8b43236c31798386ca2bf15a6381b2a3ed5f444f56da15f4cda10089cd2d
+ * - ab191d55047832f58cfb02b061b9fd6c72be854113ad0c9362160e03e7beaef1
  */
 
 /** BlackRock / custodian source addresses (tx inputs). */
@@ -27,6 +28,7 @@ export const DEFAULT_IBIT_BTC_WATCH_ADDRESSES = [
   'bc1qu5rcfcp2f7wr9t389rdsy6qf77c4d2rk2za7g4',
   'bc1qwykacvxpwqy48h7y7kn2sv5zgdd4277gp9s8r2',
   'bc1qsn9slxylhevwgp94la9ccmhasdk9l539dwcxv0',
+  'bc1qy0tgh7cshn2t56lqe0e0at507hc0muj05tzntx',
 ] as const;
 
 /** Coinbase Prime destinations (large deposit + repeated small output seen on both txs). */
