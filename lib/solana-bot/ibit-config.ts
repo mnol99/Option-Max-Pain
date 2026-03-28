@@ -39,6 +39,9 @@ export const DEFAULT_IBIT_BTC_COINBASE_ADDRESSES = [
   '3J7cUjBZxvGRCwFBz3q23zAsnhFfZrDSSU',
 ] as const;
 
+/** Main Prime deposit address — used for ~200–300 BTC leg filter. */
+export const DEFAULT_IBIT_MAIN_DEPOSIT_ADDRESS = DEFAULT_IBIT_BTC_COINBASE_ADDRESSES[0];
+
 function parseList(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   return raw
@@ -65,4 +68,45 @@ export function getIbitMinSats(): number {
   const n = Number(process.env.IBIT_MIN_SATS);
   if (Number.isFinite(n) && n > 0) return Math.floor(n);
   return 100_000;
+}
+
+/** Primary deposit address for large-BTC heuristic (defaults to first Coinbase addr). */
+export function getIbitMainDepositAddress(): string {
+  const e = process.env.IBIT_MAIN_DEPOSIT_ADDRESS?.trim();
+  if (e) return e;
+  return DEFAULT_IBIT_MAIN_DEPOSIT_ADDRESS;
+}
+
+/**
+ * Strict detection: ~daily batch time + main output size (see env overrides).
+ * Set IBIT_DISABLE_STRICT_FILTERS=1 to use legacy 02:00–09:30 ET block filter only.
+ */
+export function isIbitStrictFiltersEnabled(): boolean {
+  return process.env.IBIT_DISABLE_STRICT_FILTERS !== '1';
+}
+
+/** ET minute-of-day for detection window start (default 06:00 → 360). */
+export function getIbitDetectStartMinEt(): number {
+  const n = Number(process.env.IBIT_DETECT_START_MIN_ET);
+  if (Number.isFinite(n) && n >= 0 && n < 24 * 60) return Math.floor(n);
+  return 6 * 60;
+}
+
+/** ET minute-of-day, exclusive end (default 07:45 → 465). */
+export function getIbitDetectEndMinEt(): number {
+  const n = Number(process.env.IBIT_DETECT_END_MIN_ET);
+  if (Number.isFinite(n) && n > 0 && n <= 24 * 60) return Math.floor(n);
+  return 7 * 60 + 45;
+}
+
+export function getIbitMainOutMinBtc(): number {
+  const n = Number(process.env.IBIT_MAIN_OUT_MIN_BTC);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 200;
+}
+
+export function getIbitMainOutMaxBtc(): number {
+  const n = Number(process.env.IBIT_MAIN_OUT_MAX_BTC);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 301;
 }

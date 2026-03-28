@@ -13,6 +13,25 @@ export function isWithinSignalWindowEt(now: Date = new Date()): boolean {
   return minutes >= start && minutes < end;
 }
 
+/** Minutes since local midnight in IBIT_TZ (for block-time filters). */
+export function getEtMinutesFromMidnight(d: Date): number {
+  const p = getEtParts(d);
+  return p.hour * 60 + p.minute;
+}
+
+/**
+ * Whether block confirmation time falls in [startMin, endExclusiveMin) ET.
+ * Example: 06:00–07:45 → startMin=360, endExclusiveMin=465.
+ */
+export function isBlockTimeInEtMinuteWindow(
+  blockTimeSec: number,
+  startMin: number,
+  endExclusiveMin: number
+): boolean {
+  const m = getEtMinutesFromMidnight(new Date(blockTimeSec * 1000));
+  return m >= startMin && m < endExclusiveMin;
+}
+
 /** 25 cover slots: 11:00, 11:10, …, 14:00 ET on the calendar day of `anchorUtc`. */
 export function getCoverScheduleUtc(anchorUtc: Date): Date[] {
   const y = etYearMonthDay(anchorUtc);

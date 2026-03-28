@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import dynamic from 'next/dynamic';
 import { VersionedTransaction } from '@solana/web3.js';
-import { getCoverScheduleUtc, IBIT_TZ, isWithinSignalWindowEt } from '@/lib/solana-bot/ibit-schedule';
+import { getCoverScheduleUtc, IBIT_TZ } from '@/lib/solana-bot/ibit-schedule';
 
 const WalletMultiButtonDynamic = dynamic(
   () => import('@solana/wallet-adapter-react-ui').then((m) => m.WalletMultiButton),
@@ -20,15 +20,28 @@ interface PollPayload {
   configured: boolean;
   watchAddresses: string[];
   coinbaseAddresses: string[];
-  inSignalWindow: boolean;
+  inLegacySignalWindow: boolean;
+  inDetectWindow: boolean;
+  detection: {
+    strictFilters: boolean;
+    mainDepositAddress: string;
+    detectStartMinEt: number;
+    detectEndMinEt: number;
+    mainOutMinBtc: number;
+    mainOutMaxBtc: number;
+  };
   signals: Array<{
     txid: string;
     blockTime: number;
     sourceAddress: string;
     sats: number;
+    mainOutSats?: number;
+    mainOutBtc?: number;
     matchedDestinations: string[];
     coverScheduleUtc: string[];
+    detectionMode?: 'strict' | 'legacy';
   }>;
+  batchGroups: Array<{ blockTime: number; txids: string[] }>;
   error?: string;
 }
 
@@ -40,6 +53,12 @@ function formatEt(iso: string): string {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function formatEtMin(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
 }
 
 export default function IbitPage() {
@@ -231,7 +250,8 @@ export default function IbitPage() {
     return formatEt(sched[coveredSlots]!);
   }, [coverScheduleForActive, coveredSlots]);
 
-  const etWindowOpen = mounted && isWithinSignalWindowEt();
+  const detectWindowOpen =
+    mounted && (poll?.inDetectWindow ?? false);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -276,11 +296,17 @@ export default function IbitPage() {
 
       <main className="container mx-auto px-4 py-8 max-w-4xl space-y-6">
         <p className="text-sm text-gray-600">
-          Monitors Bitcoin on-chain transfers from configured source addresses to Coinbase deposit
-          addresses (Blockstream API). Signal window: <strong>02:00–09:30 ET</strong>. On signal:
-          short BTC perps (Jupiter); cover in <strong>25 equal slices</strong> at{' '}
-          <strong>11:00–14:00 ET</strong> (every 10 minutes). Set addresses in{' '}
-          <code className="text-xs bg-gray-100 px-1 rounded">.env.local</code>.
+          Monitors Bitcoin on-chain transfers from configured source addresses to your Coinbase Prime
+          deposit addresses (Blockstream). By default, strict detection uses your sample:{' '}
+          <strong>~06:00–07:45 ET</strong> block time, main output to the primary deposit in{' '}
+          <strong>~200–301 BTC</strong>, and same addresses as before. Multiple txs in the same
+          block are grouped as one batch. On signal: short BTC perps; cover in{' '}
+          <strong>25 slices 11:00–14:00 ET</strong>. Override via{' '}
+          <code className="text-xs bg-gray-100 px-1 rounded">.env.local</code> (
+          <code className="text-xs">IBIT_DETECT_*</code>,{' '}
+          <code className="text-xs">IBIT_MAIN_OUT_*</code>; set{' '}
+          <code className="text-xs">IBIT_DISABLE_STRICT_FILTERS=1</code> for legacy 02:00–09:30 ET
+          only).
         </p>
 
         <section className="bg-white rounded-lg shadow p-6 space-y-3">
@@ -291,10 +317,28 @@ export default function IbitPage() {
               <span className="font-mono">{btcPrice != null ? `$${btcPrice.toFixed(2)}` : '—'}</span>
             </p>
             <p>
-              Signal window (02:00–09:30 ET):{' '}
-              <span className={etWindowOpen ? 'text-green-700 font-medium' : 'text-gray-600'}>
-                {mounted ? (etWindowOpen ? 'open' : 'closed') : '…'}
+              Detection window (current time):{' '}
+              <span className={detectWindowOpen ? 'text-green-700 font-medium' : 'text-gray-600'}>
+                {mounted ? (detectWindowOpen ? 'open' : 'closed') : '…'}
               </span>
+            </p>
+            {poll?.detection && (
+              <p className="text-xs text-gray-600">
+                {poll.detection.strictFilters ? (
+                  <>
+                    Strict: block time ET {formatEtMin(poll.detection.detectStartMinEt)}–
+                    {formatEtMin(poll.detection.detectEndMinEt)}; main out{' '}
+                    {poll.detection.mainOutMinBtc}–{poll.detection.mainOutMaxBtc} BTC to{' '}
+                    <span className="font-mono">{poll.detection.mainDepositAddress.slice(0, 12)}…</span>
+                  </>
+                ) : (
+                  <>Legacy: block time 02:00–09:30 ET (no main-output band)</>
+                )}
+              </p>
+            )}
+            <p className="text-xs text-gray-500">
+              Legacy broad window (02:00–09:30 ET) now:{' '}
+              {poll?.inLegacySignalWindow ? 'open' : 'closed'}
             </p>
             <p>
               API configured:{' '}
@@ -414,8 +458,21 @@ export default function IbitPage() {
           </p>
         </section>
 
-        <section className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold mb-3">Recent signals</h2>
+        <section className="bg-white rounded-lg shadow p-6 space-y-4">
+          <h2 className="text-lg font-semibold">Recent signals</h2>
+          {poll?.batchGroups && poll.batchGroups.length > 0 && (
+            <div className="text-sm">
+              <p className="font-medium text-gray-800 mb-1">Same-block batches</p>
+              <ul className="text-xs text-gray-600 space-y-1">
+                {poll.batchGroups.slice(0, 8).map((b) => (
+                  <li key={b.blockTime}>
+                    {new Date(b.blockTime * 1000).toLocaleString('en-US', { timeZone: IBIT_TZ })} —{' '}
+                    {b.txids.length} tx{b.txids.length > 1 ? 's' : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!poll?.signals?.length ? (
             <p className="text-sm text-gray-600">No matching transfers in the polled history.</p>
           ) : (
@@ -424,7 +481,9 @@ export default function IbitPage() {
                 <li key={s.txid} className="border-b border-gray-100 pb-2">
                   <div>{s.txid}</div>
                   <div className="text-gray-600 text-xs">
+                    main {s.mainOutBtc != null ? `${s.mainOutBtc.toFixed(4)} BTC` : '—'} · total{' '}
                     {s.sats} sats → {s.matchedDestinations.join(', ')}
+                    {s.detectionMode && ` · ${s.detectionMode}`}
                   </div>
                 </li>
               ))}
@@ -447,6 +506,20 @@ export default function IbitPage() {
             </li>
             <li>
               <code>BITCOIN_API_BASE</code> — optional (default Blockstream public API)
+            </li>
+            <li>
+              <code>IBIT_DETECT_START_MIN_ET</code> / <code>IBIT_DETECT_END_MIN_ET</code> — minute of
+              day ET (default 360–465 = 06:00–07:45)
+            </li>
+            <li>
+              <code>IBIT_MAIN_OUT_MIN_BTC</code> / <code>IBIT_MAIN_OUT_MAX_BTC</code> — main deposit
+              size band (default 200–301)
+            </li>
+            <li>
+              <code>IBIT_MAIN_DEPOSIT_ADDRESS</code> — override primary deposit for the size band
+            </li>
+            <li>
+              <code>IBIT_DISABLE_STRICT_FILTERS=1</code> — legacy 02:00–09:30 ET block filter only
             </li>
           </ul>
         </section>

@@ -42,3 +42,12 @@ export function sumToAddresses(
   }
   return { sats, destinations };
 }
+
+/** Total sats sent to a single address (main Prime deposit leg). */
+export function sumToAddress(tx: BlockstreamTxRef, address: string): number {
+  let sats = 0;
+  for (const o of tx.vout || []) {
+    if (o.scriptpubkey_address === address) sats += Math.round(o.value);
+  }
+  return sats;
+}
