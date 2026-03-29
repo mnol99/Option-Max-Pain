@@ -41,6 +41,9 @@ const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 
+/** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v1';
+
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
     hour: '2-digit',
@@ -141,6 +144,108 @@ export default function TradePage() {
   useEffect(() => {
     stateByStrategyRef.current = stateByStrategy;
   }, [stateByStrategy]);
+
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = sessionStorage.getItem(TRADE_SESSION_STORAGE_KEY);
+      if (!raw) {
+        setSessionHydrated(true);
+        return;
+      }
+      const p = JSON.parse(raw) as {
+        activeStrategyId?: string;
+        stateByStrategy?: Record<string, TradeState>;
+        tradesByStrategy?: Record<string, ClosedTrade[]>;
+        breakoutByStrategy?: Record<string, { long: number; short: number }>;
+        entering?: Record<string, boolean>;
+        paperStartingBalance?: number;
+        paperPositionSizeUsd?: number;
+        liveAmountToRun?: number;
+        leverage?: number;
+        useChartPrice?: boolean;
+        liveMode?: boolean;
+        blkPaperState?: BlkPaperState;
+        blkProcessedSignals?: string[];
+      };
+      if (p.activeStrategyId && TRADE_STRATEGIES.some((s) => s.id === p.activeStrategyId)) {
+        setActiveStrategyId(p.activeStrategyId);
+      }
+      if (p.stateByStrategy) {
+        setStateByStrategy(p.stateByStrategy);
+        stateByStrategyRef.current = p.stateByStrategy;
+      }
+      if (p.tradesByStrategy) setTradesByStrategy(p.tradesByStrategy);
+      if (p.breakoutByStrategy) {
+        setBreakoutByStrategy(p.breakoutByStrategy);
+        for (const s of INSIDE_BAR_STRATEGIES) {
+          const b = p.breakoutByStrategy[s.id];
+          if (b) breakoutRef.current[s.id] = { ...b };
+        }
+      }
+      if (p.paperStartingBalance != null) setPaperStartingBalance(p.paperStartingBalance);
+      if (p.paperPositionSizeUsd != null) setPaperPositionSizeUsd(p.paperPositionSizeUsd);
+      if (p.liveAmountToRun != null) setLiveAmountToRun(p.liveAmountToRun);
+      if (p.leverage != null) setLeverage(p.leverage);
+      if (p.useChartPrice != null) setUseChartPrice(p.useChartPrice);
+      if (p.liveMode != null) setLiveMode(p.liveMode);
+      if (p.blkPaperState) setBlkPaperState(p.blkPaperState);
+      if (p.entering) {
+        for (const s of INSIDE_BAR_STRATEGIES) {
+          enteringRef.current[s.id] = p.entering[s.id] ?? false;
+        }
+      }
+      if (p.blkProcessedSignals?.length) {
+        blkProcessedSignalsRef.current = new Set(p.blkProcessedSignals);
+      }
+    } catch {
+      /* ignore corrupt storage */
+    }
+    setSessionHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydrated || typeof window === 'undefined') return;
+    try {
+      const payload = {
+        activeStrategyId,
+        stateByStrategy,
+        tradesByStrategy,
+        breakoutByStrategy: Object.fromEntries(
+          INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...breakoutRef.current[s.id] }])
+        ),
+        entering: Object.fromEntries(
+          INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
+        ),
+        paperStartingBalance,
+        paperPositionSizeUsd,
+        liveAmountToRun,
+        leverage,
+        useChartPrice,
+        liveMode,
+        blkPaperState,
+        blkProcessedSignals: Array.from(blkProcessedSignalsRef.current),
+      };
+      sessionStorage.setItem(TRADE_SESSION_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      /* quota / private mode */
+    }
+  }, [
+    sessionHydrated,
+    activeStrategyId,
+    stateByStrategy,
+    tradesByStrategy,
+    breakoutByStrategy,
+    paperStartingBalance,
+    paperPositionSizeUsd,
+    liveAmountToRun,
+    leverage,
+    useChartPrice,
+    liveMode,
+    blkPaperState,
+  ]);
 
   const activeDef = TRADE_STRATEGIES.find((s) => s.id === activeStrategyId) ?? TRADE_STRATEGIES[0];
   const activeIntervalSec = activeDef.intervalSec;
