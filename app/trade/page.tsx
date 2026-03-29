@@ -1080,9 +1080,11 @@ export default function TradePage() {
                         <div className="flex flex-wrap gap-x-2">
                           <span className="text-gray-600 font-medium">Entry:</span>
                           <span>
-                            {t.solAmount != null
-                              ? `${t.solAmount.toFixed(4)} ${t.asset === 'btc' ? 'BTC' : 'SOL'}`
-                              : '—'}
+                            {t.asset === 'btc' && t.btcAmount != null
+                              ? `${t.btcAmount.toFixed(6)} BTC`
+                              : t.solAmount != null
+                                ? `${t.solAmount.toFixed(4)} SOL`
+                                : '—'}
                             {' @ $'}
                             <span className="font-mono">{formatPrice(t.entryPrice)}</span>
                           </span>
