@@ -18,6 +18,8 @@ export async function GET() {
         logFile: getMeanRevLogPath(),
         accountUsd: getMeanRevAccountUsd(),
         positionSizeUsd: getMeanRevPositionSizeUsd(),
+        completed15mBars: data.completed15mBars,
+        minBarsForSignal: data.minBarsForSignal,
       },
     });
   } catch (e) {

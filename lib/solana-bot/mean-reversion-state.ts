@@ -234,22 +234,36 @@ function processPosition(
   return { pos: p, events };
 }
 
+const MIN_BARS_FOR_SIGNAL = 51;
+
 export async function tickMeanReversion(): Promise<{
   positions: Record<string, MeanRevPosition | null>;
   lastBar: Record<string, number | null>;
+  /** Completed 15m bars stored so far (need 2+ for lastBar, 51+ for entries) */
+  completed15mBars: Record<string, number>;
+  minBarsForSignal: number;
 }> {
   const out: Record<string, MeanRevPosition | null> = {};
   const lastBar: Record<string, number | null> = { sol: null, btc: null };
+  const completed15mBars: Record<string, number> = { sol: 0, btc: 0 };
 
   for (const asset of ['sol', 'btc'] as MeanRevAsset[]) {
     const newestFirst = getMeanRevCandles15m(asset);
+    completed15mBars[asset] = newestFirst.length;
     const h1 = candlesOldestFirst(getMeanRevCandles1h(asset));
-    if (newestFirst.length < 2) {
+
+    if (newestFirst.length === 0) {
       out[asset] = positions.get(asset) ?? null;
       continue;
     }
 
     const oldest = candlesOldestFirst(newestFirst);
+    if (newestFirst.length === 1) {
+      lastBar[asset] = oldest[0]!.unixTime;
+      out[asset] = positions.get(asset) ?? null;
+      continue;
+    }
+
     const lastClosed = oldest[oldest.length - 2]!;
     const lastClosedTs = lastClosed.unixTime;
     lastBar[asset] = lastClosedTs;
@@ -272,7 +286,7 @@ export async function tickMeanReversion(): Promise<{
     }
     lastBarProcessed.set(asset, lastClosedTs);
 
-    if (oldest.length < 51) {
+    if (oldest.length < MIN_BARS_FOR_SIGNAL) {
       out[asset] = positions.get(asset) ?? null;
       continue;
     }
@@ -322,7 +336,12 @@ export async function tickMeanReversion(): Promise<{
     out[asset] = positions.get(asset) ?? null;
   }
 
-  return { positions: out, lastBar };
+  return {
+    positions: out,
+    lastBar,
+    completed15mBars,
+    minBarsForSignal: MIN_BARS_FOR_SIGNAL,
+  };
 }
 
 export function getMeanRevPositionsSnapshot(): Record<string, MeanRevPosition | null> {

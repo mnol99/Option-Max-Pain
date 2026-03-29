@@ -31,6 +31,8 @@ export default function MeanReversionPage() {
   const [tickData, setTickData] = useState<{
     positions: Record<string, Pos | null>;
     lastBar: Record<string, number | null>;
+    completed15mBars?: Record<string, number>;
+    minBarsForSignal?: number;
     logFile?: string;
     accountUsd?: number;
     positionSizeUsd?: number;
@@ -156,10 +158,29 @@ export default function MeanReversionPage() {
       <main className="container mx-auto px-4 py-6 max-w-4xl space-y-6 text-sm">
         <p className="text-gray-600">
           15m mean-reversion (SOL + BTC), 1h trend filter. Server evaluates on each{' '}
-          <strong>closed</strong> 15m bar; polls every <strong>60s</strong>. Candles built from
-          Doves (SOL) + Pyth (BTC) — synthetic volume. Set <code>MEAN_REV_ACCOUNT_USD</code> for 2%
-          sizing. Logs: <code className="text-xs">{tickData?.logFile ?? 'data/mean-reversion-events.jsonl'}</code>
+          <strong>closed</strong> 15m bar; this page polls the server every <strong>60s</strong>.
+          Candles are built from Doves (SOL) + Pyth (BTC) with synthetic volume. Set{' '}
+          <code>MEAN_REV_ACCOUNT_USD</code> for 2% sizing. Logs:{' '}
+          <code className="text-xs">{tickData?.logFile ?? 'data/mean-reversion-events.jsonl'}</code>
         </p>
+        {tickData?.completed15mBars && tickData.minBarsForSignal != null && (
+          <div
+            className={`p-3 rounded-lg text-sm ${
+              tickData.completed15mBars.sol! >= tickData.minBarsForSignal &&
+              tickData.completed15mBars.btc! >= tickData.minBarsForSignal
+                ? 'bg-green-50 text-green-900 border border-green-200'
+                : 'bg-amber-50 text-amber-900 border border-amber-200'
+            }`}
+          >
+            <strong>Status:</strong> Engine is running. SOL 15m bars stored:{' '}
+            {tickData.completed15mBars.sol} / {tickData.minBarsForSignal} · BTC:{' '}
+            {tickData.completed15mBars.btc} / {tickData.minBarsForSignal}. Entries need{' '}
+            {tickData.minBarsForSignal} completed 15m bars per asset (~
+            {Math.ceil((tickData.minBarsForSignal * 15) / 60)} hours of history after warm-up). If
+            last bar is null, wait until the first 15m boundaries complete (~up to 30 min from dev
+            server start).
+          </div>
+        )}
 
         {error && <div className="p-3 bg-red-50 text-red-800 rounded">{error}</div>}
         {execMsg && <div className="p-3 bg-amber-50 text-amber-900 rounded">{execMsg}</div>}
@@ -203,6 +224,9 @@ export default function MeanReversionPage() {
 
         <section className="bg-white rounded-lg shadow p-4">
           <h2 className="font-semibold mb-2">Last closed 15m bar (unix)</h2>
+          <p className="text-xs text-gray-500 mb-2">
+            Shows the previous full 15m candle open time once at least two completed bars exist.
+          </p>
           <pre className="text-xs overflow-x-auto">
             {JSON.stringify(tickData?.lastBar ?? {}, null, 2)}
           </pre>
