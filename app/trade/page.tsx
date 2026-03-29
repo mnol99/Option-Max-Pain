@@ -349,7 +349,7 @@ export default function TradePage() {
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc
                 : BLK_DEFAULT_NOTIONAL_USD / price;
-            return createBlkShortOpenState(price, t, sig.txid, BLK_DEFAULT_NOTIONAL_USD, chainBtc);
+            return createBlkShortOpenState(price, t, sig.txid, chainBtc * price, chainBtc);
           }
           return prev;
         });
@@ -713,8 +713,8 @@ export default function TradePage() {
           {isBlkTab ? (
             <>
               <span className="font-semibold">BLK</span> — on-chain transfer size (main output to Coinbase)
-              sizes the session short; cover notional is ${BLK_DEFAULT_NOTIONAL_USD.toFixed(0)} in{' '}
-              {BLK_COVER_SLICES} equal slices (round-turn PnL per slice). Covers{' '}
+              sizes the session short; covers are {BLK_COVER_SLICES} equal BTC slices (on-chain BTC ÷{' '}
+              {BLK_COVER_SLICES}, round-turn PnL per slice). Covers{' '}
               <span className="font-semibold">10:00–12:50 ET</span>. Pyth BTC price. Signals from{' '}
               <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
@@ -860,20 +860,21 @@ export default function TradePage() {
                         <span className="font-mono">${formatPrice(blkPaperState.entryBtc)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Cover notional (total)</span>
-                        <span className="font-mono">${blkPaperState.notionalUsd.toFixed(0)}</span>
-                      </div>
-                      <div className="flex justify-between">
                         <span className="text-gray-600">On-chain to CB (short size)</span>
                         <span className="font-mono">
                           {blkPaperState.chainMainOutBtc.toFixed(4)} BTC
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Per cover slice (~)</span>
+                        <span className="text-gray-600">Per cover slice (BTC)</span>
                         <span className="font-mono">
-                          {((BLK_DEFAULT_NOTIONAL_USD / BLK_COVER_SLICES) / blkPaperState.entryBtc).toFixed(6)}{' '}
-                          BTC
+                          {(blkPaperState.chainMainOutBtc / BLK_COVER_SLICES).toFixed(6)} BTC
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Ref. notional (short × Pyth)</span>
+                        <span className="font-mono">
+                          ${(blkPaperState.chainMainOutBtc * blkPaperState.entryBtc).toFixed(0)}
                         </span>
                       </div>
                       <div className="flex justify-between">

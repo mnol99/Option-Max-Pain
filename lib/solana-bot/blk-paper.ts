@@ -15,7 +15,7 @@ export interface BlkPaperState {
   /** BTC price at entry (Pyth, when signal processed) */
   entryBtc: number | null;
   entryTime: number | null;
-  /** Paper notional cap (USD); slice = this / 18 */
+  /** Reference notional (USD) for UI; cover size is on-chain BTC ÷ 18 */
   notionalUsd: number;
   /** Main output to Coinbase Prime (BTC) — sizes the session short */
   chainMainOutBtc: number;
@@ -115,8 +115,8 @@ export function processBlkPaperTick(
   }
 
   const entry = prev.entryBtc;
-  const sliceUsd = prev.notionalUsd / BLK_COVER_SLICES;
-  const sliceBtc = sliceUsd / entry;
+  const sliceBtc = prev.chainMainOutBtc / BLK_COVER_SLICES;
+  const sliceUsd = sliceBtc * entry;
   const closedTrades: ClosedTrade[] = [];
   let next: BlkPaperState = { ...prev };
   let cumulative = prev.cumulativePnlUsd;
@@ -133,7 +133,7 @@ export function processBlkPaperTick(
     const slotUtc = Date.parse(next.coverScheduleUtc[next.nextSliceIndex]!);
     if (nowSec * 1000 < slotUtc) break;
 
-    const legPnlUsd = ((entry - btcPrice) / entry) * sliceUsd;
+    const legPnlUsd = (entry - btcPrice) * sliceBtc;
     cumulative += legPnlUsd;
     const pnlPercent = (legPnlUsd / sliceUsd) * 100;
     const idx = next.nextSliceIndex;
