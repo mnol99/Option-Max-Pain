@@ -13,6 +13,7 @@ import {
   checkPositionExit,
   checkReversedExit,
   computeMetrics,
+  computeBlkMetrics,
   getEffectiveTpLong,
   getEffectiveTpShort,
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
@@ -42,7 +43,7 @@ const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
-const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v1';
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v2';
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
@@ -332,7 +333,11 @@ export default function TradePage() {
         const res = await fetch('/api/solana-bot/ibit/poll');
         const json = await res.json();
         if (!json.success || !json.data?.signals || cancelled) return;
-        const signals = json.data.signals as Array<{ txid: string; blockTime: number }>;
+        const signals = json.data.signals as Array<{
+          txid: string;
+          blockTime: number;
+          mainOutBtc: number;
+        }>;
         const price = btcPrice;
         setBlkPaperState((prev) => {
           if (prev.status !== 'idle') return prev;
@@ -340,7 +345,11 @@ export default function TradePage() {
             if (blkProcessedSignalsRef.current.has(sig.txid)) continue;
             blkProcessedSignalsRef.current.add(sig.txid);
             const t = sig.blockTime > 0 ? sig.blockTime : Math.floor(Date.now() / 1000);
-            return createBlkShortOpenState(price, t, sig.txid, BLK_DEFAULT_NOTIONAL_USD);
+            const chainBtc =
+              typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
+                ? sig.mainOutBtc
+                : BLK_DEFAULT_NOTIONAL_USD / price;
+            return createBlkShortOpenState(price, t, sig.txid, BLK_DEFAULT_NOTIONAL_USD, chainBtc);
           }
           return prev;
         });
@@ -360,23 +369,13 @@ export default function TradePage() {
   useEffect(() => {
     if (liveMode || btcPrice == null || btcTime == null) return;
     const prev = blkPaperStateRef.current;
-    const { state: next, closedTrade } = processBlkPaperTick(prev, btcPrice, btcTime);
+    const { state: next, closedTrades } = processBlkPaperTick(prev, btcPrice, btcTime);
     if (next !== prev) setBlkPaperState(next);
-    if (closedTrade) {
-      const notional =
-        closedTrade.pnlUsd != null && Math.abs(closedTrade.pnlPercent) > 1e-8
-          ? closedTrade.pnlUsd! / (closedTrade.pnlPercent / 100)
-          : BLK_DEFAULT_NOTIONAL_USD;
-      const enriched: ClosedTrade = {
-        ...closedTrade,
-        pnlUsd: closedTrade.pnlUsd,
-        btcAmount: notional / closedTrade.entryPrice,
-        asset: 'btc',
-        ibitSignalTxid: closedTrade.ibitSignalTxid,
-      };
+    if (closedTrades.length > 0) {
+      const enriched = closedTrades.map((t) => ({ ...t, asset: 'btc' as const }));
       setTradesByStrategy((p) => ({
         ...p,
-        [BLK_STRATEGY_ID]: [enriched, ...(p[BLK_STRATEGY_ID] ?? [])],
+        [BLK_STRATEGY_ID]: [...enriched.reverse(), ...(p[BLK_STRATEGY_ID] ?? [])],
       }));
     }
   }, [btcPrice, btcTime, liveMode]);
@@ -630,13 +629,14 @@ export default function TradePage() {
   ]);
 
   const blkTrades = tradesByStrategy[BLK_STRATEGY_ID] ?? [];
-  const blkMetrics = computeMetrics(blkTrades);
+  const blkMetrics = computeBlkMetrics(blkTrades);
+  const blkSessionOpenCount = blkTrades.filter((t) => t.exitReason === 'blk_open').length;
   const metrics = isBlkTab ? blkMetrics : computeMetrics(trades);
   const totalPnlAllStrategies =
     INSIDE_BAR_STRATEGIES.reduce(
       (sum, s) => sum + computeMetrics(tradesByStrategy[s.id] ?? []).totalPnl,
       0
-    ) + blkMetrics.totalPnl;
+    ) + computeBlkMetrics(tradesByStrategy[BLK_STRATEGY_ID] ?? []).totalPnl;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -712,11 +712,11 @@ export default function TradePage() {
         <p className="text-sm text-gray-600 mb-4">
           {isBlkTab ? (
             <>
-              <span className="font-semibold">BLK</span> — paper IBIT → short{' '}
-              ${BLK_DEFAULT_NOTIONAL_USD.toFixed(0)} BTC notional, covers{' '}
-              <span className="font-semibold">10:00–12:50 ET</span> ({BLK_COVER_SLICES} × 10m). Uses
-              Pyth BTC price. Signals from <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code>{' '}
-              (paper mode only).
+              <span className="font-semibold">BLK</span> — on-chain transfer size (main output to Coinbase)
+              sizes the session short; cover notional is ${BLK_DEFAULT_NOTIONAL_USD.toFixed(0)} in{' '}
+              {BLK_COVER_SLICES} equal slices (round-turn PnL per slice). Covers{' '}
+              <span className="font-semibold">10:00–12:50 ET</span>. Pyth BTC price. Signals from{' '}
+              <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
           ) : (
             <>
@@ -860,8 +860,21 @@ export default function TradePage() {
                         <span className="font-mono">${formatPrice(blkPaperState.entryBtc)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Notional</span>
+                        <span className="text-gray-600">Cover notional (total)</span>
                         <span className="font-mono">${blkPaperState.notionalUsd.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">On-chain to CB (short size)</span>
+                        <span className="font-mono">
+                          {blkPaperState.chainMainOutBtc.toFixed(4)} BTC
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Per cover slice (~)</span>
+                        <span className="font-mono">
+                          {((BLK_DEFAULT_NOTIONAL_USD / BLK_COVER_SLICES) / blkPaperState.entryBtc).toFixed(6)}{' '}
+                          BTC
+                        </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Cover progress</span>
@@ -1044,9 +1057,20 @@ export default function TradePage() {
                     ${formatPrice(metrics.estimatedTotalFeesUsd)}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
-                    Running total: {metrics.feeLegCount} fee legs (
-                    {metrics.totalTrades} opens + {metrics.totalTrades} closes) at ~
-                    {JUPITER_PERPS_EST_FEE_BPS_PER_SIDE} bps per side (taker, Jupiter Perps).
+                    {isBlkTab ? (
+                      <>
+                        Running total: {metrics.feeLegCount} fee legs (
+                        {blkSessionOpenCount} session open{blkSessionOpenCount === 1 ? '' : 's'} × 2 +{' '}
+                        {metrics.totalTrades} cover round-turn{metrics.totalTrades === 1 ? '' : 's'} × 2) at ~
+                        {JUPITER_PERPS_EST_FEE_BPS_PER_SIDE} bps per side. Win rate counts cover slices only.
+                      </>
+                    ) : (
+                      <>
+                        Running total: {metrics.feeLegCount} fee legs (
+                        {metrics.totalTrades} opens + {metrics.totalTrades} closes) at ~
+                        {JUPITER_PERPS_EST_FEE_BPS_PER_SIDE} bps per side (taker, Jupiter Perps).
+                      </>
+                    )}{' '}
                     Not net PnL—actual fees depend on tier and maker/taker mix.
                   </p>
                 </div>
@@ -1056,7 +1080,9 @@ export default function TradePage() {
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade Log</h2>
                   <p className="text-xs text-gray-500 mb-3">
-                Entry: {isBlkTab ? 'BTC' : 'SOL'} amount @ price · time · Exit: price · time · PnL
+                {isBlkTab
+                  ? 'Session open (chain-sized short) then 18 cover round-turns (short + buy per slice) with PnL each.'
+                  : 'Entry: SOL amount @ price · time · Exit: price · time · PnL'}
               </p>
               <div className="max-h-80 overflow-y-auto space-y-3">
                 {trades.length === 0 ? (
@@ -1073,46 +1099,84 @@ export default function TradePage() {
                             t.side === 'long' ? 'text-green-600' : 'text-red-600'
                           }`}
                         >
-                          {t.side?.toUpperCase()}
+                          {t.exitReason === 'blk_open'
+                            ? 'SESSION OPEN'
+                            : t.exitReason === 'blk_cover'
+                              ? `COVER ${t.blkSliceIndex != null ? t.blkSliceIndex + 1 : '?'}/${BLK_COVER_SLICES}`
+                              : t.side?.toUpperCase()}
                         </span>
-                        <span className="text-gray-500 text-xs capitalize">{t.exitReason}</span>
+                        <span className="text-gray-500 text-xs">
+                          {t.exitReason === 'blk_open'
+                            ? 'short (chain size)'
+                            : t.exitReason === 'blk_cover'
+                              ? 'round-turn'
+                              : t.exitReason}
+                        </span>
                       </div>
                       <div className="grid gap-2">
-                        <div className="flex flex-wrap gap-x-2">
-                          <span className="text-gray-600 font-medium">Entry:</span>
-                          <span>
-                            {t.asset === 'btc' && t.btcAmount != null
-                              ? `${t.btcAmount.toFixed(6)} BTC`
-                              : t.solAmount != null
-                                ? `${t.solAmount.toFixed(4)} SOL`
-                                : '—'}
-                            {' @ $'}
-                            <span className="font-mono">{formatPrice(t.entryPrice)}</span>
-                          </span>
-                          {t.entryTime != null && (
-                            <span className="text-gray-500 font-mono text-xs">
-                              {formatTime(t.entryTime)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-x-2">
-                          <span className="text-gray-600 font-medium">Exit:</span>
-                          <span className="font-mono">${formatPrice(t.exitPrice)}</span>
-                          <span className="text-gray-500 font-mono text-xs">
-                            {formatTime(t.exitTime)}
-                          </span>
-                        </div>
-                        <div
-                          className={`font-mono font-semibold pt-1 ${
-                            t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                          }`}
-                        >
-                          PnL:{' '}
-                          {t.pnlUsd != null
-                            ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
-                            : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
-                          {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
-                        </div>
+                        {t.exitReason === 'blk_open' ? (
+                          <>
+                            <p className="text-gray-700">
+                              Short <span className="font-mono">{t.btcAmount?.toFixed(4)} BTC</span> @{' '}
+                              <span className="font-mono">${formatPrice(t.entryPrice)}</span>
+                              <span className="text-gray-500 font-mono text-xs ml-2">
+                                {formatTime(t.entryTime)}
+                              </span>
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Mirrors main output to Coinbase on the signal tx (on-chain size). PnL accrues on
+                              cover rows below.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex flex-wrap gap-x-2">
+                              <span className="text-gray-600 font-medium">Short leg:</span>
+                              <span>
+                                {t.asset === 'btc' && t.btcAmount != null
+                                  ? `${t.btcAmount.toFixed(6)} BTC`
+                                  : t.solAmount != null
+                                    ? `${t.solAmount.toFixed(4)} SOL`
+                                    : '—'}
+                                {' @ $'}
+                                <span className="font-mono">{formatPrice(t.entryPrice)}</span>
+                              </span>
+                              {t.entryTime != null && (
+                                <span className="text-gray-500 font-mono text-xs">
+                                  {formatTime(t.entryTime)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-x-2">
+                              <span className="text-gray-600 font-medium">Cover (buy):</span>
+                              <span>
+                                {t.asset === 'btc' && t.btcAmount != null
+                                  ? `${t.btcAmount.toFixed(6)} BTC`
+                                  : '—'}{' '}
+                                @ <span className="font-mono">${formatPrice(t.exitPrice)}</span>
+                              </span>
+                              <span className="text-gray-500 font-mono text-xs">
+                                {formatTime(t.exitTime)}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                        {t.exitReason !== 'blk_open' && (
+                          <div
+                            className={`font-mono font-semibold pt-1 ${
+                              t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}
+                          >
+                            Slice PnL:{' '}
+                            {t.pnlUsd != null
+                              ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
+                              : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
+                            {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
+                          </div>
+                        )}
+                        {t.exitReason === 'blk_open' && (
+                          <div className="font-mono text-gray-600 pt-1">Slice PnL: $0.00 (open)</div>
+                        )}
                         {t.asset === 'btc' && t.ibitSignalTxid && (
                           <p className="text-xs text-gray-500 break-all pt-1">
                             IBIT signal (BTC tx): {t.ibitSignalTxid}

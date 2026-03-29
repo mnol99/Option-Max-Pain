@@ -71,7 +71,7 @@ export interface ClosedTrade {
   entryTime: number;
   exitPrice: number;
   exitTime: number;
-  exitReason: 'tp' | 'time' | 'stop' | 'reverse';
+  exitReason: 'tp' | 'time' | 'stop' | 'reverse' | 'blk_open' | 'blk_cover';
   /** Take-profit / liquidation target price */
   liquidationPrice: number;
   pnl: number;
@@ -85,6 +85,12 @@ export interface ClosedTrade {
   asset?: 'sol' | 'btc';
   /** BLK: Bitcoin chain txid that triggered the paper short */
   ibitSignalTxid?: string;
+  /** BLK: group id for one IBIT session (open + 18 covers) */
+  blkSessionId?: string;
+  /** BLK cover slice 0..17 (exitReason blk_cover) */
+  blkSliceIndex?: number;
+  /** BTC observed on-chain to Coinbase (main output); session short size */
+  chainMainOutBtc?: number;
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,

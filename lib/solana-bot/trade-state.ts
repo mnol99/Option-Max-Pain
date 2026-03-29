@@ -610,3 +610,70 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
     feeLegCount,
   };
 }
+
+/** BLK: metrics from cover round-turns only; session-open row is informational (0 PnL). */
+export function computeBlkMetrics(trades: ClosedTrade[]): TradeMetrics {
+  const covers = trades.filter((t) => t.exitReason === 'blk_cover');
+  const opens = trades.filter((t) => t.exitReason === 'blk_open');
+  if (covers.length === 0 && opens.length === 0) {
+    return {
+      totalTrades: 0,
+      wins: 0,
+      losses: 0,
+      totalPnl: 0,
+      winRate: 0,
+      sharpeRatio: 0,
+      estimatedTotalFeesUsd: 0,
+      feeLegCount: 0,
+    };
+  }
+  const feeRate = JUPITER_PERPS_EST_FEE_BPS_PER_SIDE / 10000;
+  if (covers.length === 0 && opens.length > 0) {
+    let estimatedTotalFeesUsd = 0;
+    for (const t of opens) {
+      estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+    }
+    return {
+      totalTrades: 0,
+      wins: 0,
+      losses: 0,
+      totalPnl: 0,
+      winRate: 0,
+      sharpeRatio: 0,
+      estimatedTotalFeesUsd,
+      feeLegCount: opens.length * 2,
+    };
+  }
+  const total = covers.length;
+  const wins = covers.filter((t) => (t.pnlUsd ?? t.pnl) > 0).length;
+  const losses = covers.filter((t) => (t.pnlUsd ?? t.pnl) <= 0).length;
+  const totalPnl = covers.reduce((s, t) => s + (t.pnlUsd != null ? t.pnlUsd : t.pnl), 0);
+  const returns = covers.map((t) => t.pnlPercent / 100);
+  const mean = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+  const variance = returns.length
+    ? returns.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / returns.length
+    : 0;
+  const std = Math.sqrt(variance) || 1e-10;
+  const periodsPerYear = 288 * 252;
+  const sharpeRatio = (mean / std) * Math.sqrt(periodsPerYear);
+
+  let estimatedTotalFeesUsd = 0;
+  for (const t of covers) {
+    estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+  }
+  for (const t of opens) {
+    estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+  }
+  const feeLegCount = covers.length * 2 + opens.length * 2;
+
+  return {
+    totalTrades: total,
+    wins,
+    losses,
+    totalPnl,
+    winRate: total > 0 ? (wins / total) * 100 : 0,
+    sharpeRatio: std > 0 ? sharpeRatio : 0,
+    estimatedTotalFeesUsd,
+    feeLegCount,
+  };
+}
