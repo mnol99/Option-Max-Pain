@@ -117,6 +117,7 @@ export function processBlkPaperTick(
     pnlUsd: totalPnlUsd,
     btcAmount: prev.notionalUsd / entry,
     asset: 'btc',
+    ibitSignalTxid: prev.signalTxid ?? undefined,
   };
 
   return {

@@ -372,6 +372,7 @@ export default function TradePage() {
         pnlUsd: closedTrade.pnlUsd,
         btcAmount: notional / closedTrade.entryPrice,
         asset: 'btc',
+        ibitSignalTxid: closedTrade.ibitSignalTxid,
       };
       setTradesByStrategy((p) => ({
         ...p,
@@ -1112,6 +1113,11 @@ export default function TradePage() {
                             : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
                           {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
                         </div>
+                        {t.asset === 'btc' && t.ibitSignalTxid && (
+                          <p className="text-xs text-gray-500 break-all pt-1">
+                            IBIT signal (BTC tx): {t.ibitSignalTxid}
+                          </p>
+                        )}
                         {t.setup && (
                           <div className="pt-2 border-t border-gray-200">
                             <button

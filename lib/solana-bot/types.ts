@@ -83,6 +83,8 @@ export interface ClosedTrade {
   /** BLK / BTC paper: BTC notional */
   btcAmount?: number;
   asset?: 'sol' | 'btc';
+  /** BLK: Bitcoin chain txid that triggered the paper short */
+  ibitSignalTxid?: string;
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,
