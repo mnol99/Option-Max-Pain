@@ -144,11 +144,14 @@ export default function TradePage() {
 
   const activeDef = TRADE_STRATEGIES.find((s) => s.id === activeStrategyId) ?? TRADE_STRATEGIES[0];
   const activeIntervalSec = activeDef.intervalSec;
-  const isBlkTab = activeDef.kind === 'blk';
+  /** Use id + kind so BLK never shows 5m/60m trades if `kind` is missing on old bundles */
+  const isBlkTab = activeStrategyId === BLK_STRATEGY_ID || activeDef.kind === 'blk';
   const state = stateByStrategy[activeStrategyId] ?? createInitialState();
-  const candles = candlesByStrategy[activeStrategyId] ?? [];
-  const trades = tradesByStrategy[activeStrategyId] ?? [];
-  const warmupMinutes = warmupByStrategy[activeStrategyId] ?? 0;
+  const candles = isBlkTab ? [] : (candlesByStrategy[activeStrategyId] ?? []);
+  const trades = isBlkTab
+    ? (tradesByStrategy[BLK_STRATEGY_ID] ?? [])
+    : (tradesByStrategy[activeStrategyId] ?? []);
+  const warmupMinutes = isBlkTab ? 0 : (warmupByStrategy[activeStrategyId] ?? 0);
   const breakoutConfirmCount = breakoutByStrategy[activeStrategyId] ?? { long: 0, short: 0 };
 
   const executeOnBreakout = useCallback(
@@ -1115,36 +1118,44 @@ export default function TradePage() {
 
             <section className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                Recent Candles ({intervalLabel(activeIntervalSec)})
+                {isBlkTab ? 'Recent Candles' : `Recent Candles (${intervalLabel(activeIntervalSec)})`}
               </h2>
-              <p className="text-xs text-gray-500 mb-2">
-                Built from Jupiter Perps (Doves oracle), polled every 15s. Jupiter&apos;s chart may use
-                different data/aggregation—small differences possible.
-              </p>
-              <div className="text-sm overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left text-gray-600">
-                      <th className="py-1 pr-2">Time</th>
-                      <th className="py-1 pr-2">O</th>
-                      <th className="py-1 pr-2">H</th>
-                      <th className="py-1 pr-2">L</th>
-                      <th className="py-1">C</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {candles.slice(0, 6).map((c, i) => (
-                      <tr key={c.unixTime || i} className="border-t border-gray-100">
-                        <td className="py-1 pr-2 font-mono">{formatTime(c.unixTime)}</td>
-                        <td className="py-1 pr-2 font-mono">{formatPrice(c.open)}</td>
-                        <td className="py-1 pr-2 font-mono">{formatPrice(c.high)}</td>
-                        <td className="py-1 pr-2 font-mono">{formatPrice(c.low)}</td>
-                        <td className="py-1 font-mono">{formatPrice(c.close)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {isBlkTab ? (
+                <p className="text-sm text-gray-600">
+                  BLK does not use SOL OHLC candles. IBIT signals use Pyth BTC; see Status above.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Built from Jupiter Perps (Doves oracle), polled every 15s. Jupiter&apos;s chart may use
+                    different data/aggregation—small differences possible.
+                  </p>
+                  <div className="text-sm overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-left text-gray-600">
+                          <th className="py-1 pr-2">Time</th>
+                          <th className="py-1 pr-2">O</th>
+                          <th className="py-1 pr-2">H</th>
+                          <th className="py-1 pr-2">L</th>
+                          <th className="py-1">C</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {candles.slice(0, 6).map((c, i) => (
+                          <tr key={c.unixTime || i} className="border-t border-gray-100">
+                            <td className="py-1 pr-2 font-mono">{formatTime(c.unixTime)}</td>
+                            <td className="py-1 pr-2 font-mono">{formatPrice(c.open)}</td>
+                            <td className="py-1 pr-2 font-mono">{formatPrice(c.high)}</td>
+                            <td className="py-1 pr-2 font-mono">{formatPrice(c.low)}</td>
+                            <td className="py-1 font-mono">{formatPrice(c.close)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </section>
           </div>
         </div>
