@@ -1,11 +1,16 @@
 /**
  * Build OHLCV candles from Doves oracle (Jupiter Perps) for multiple bar sizes.
- * Polls once per tick and updates 5m, 10m, and 60m aggregations in parallel.
+ * Polls once per tick and updates 60m + Daily (ET) aggregations in parallel.
  */
 
 import { fetchDovesPrice } from './doves-oracle';
 import type { OHLCVCandle } from './types';
-import { STRATEGY_INTERVALS, type StrategyIntervalSec } from './candle-intervals';
+import {
+  STRATEGY_INTERVALS,
+  type StrategyIntervalSec,
+  getCandleBoundary,
+} from './candle-intervals';
+import { getNextEtDayStartUnix } from './ibit-schedule';
 
 interface CurrentCandle {
   unixTime: number;
@@ -27,11 +32,7 @@ function ensureMaps(): void {
   }
 }
 
-export function getCandleBoundary(ts: number, intervalSec: number): number {
-  return Math.floor(ts / intervalSec) * intervalSec;
-}
-
-/** @deprecated use getCandleBoundary(ts, 300) */
+/** @deprecated use getCandleBoundary from candle-intervals */
 export function get5mBoundary(ts: number): number {
   return getCandleBoundary(ts, 300);
 }
@@ -120,6 +121,10 @@ export function getWarmupMinutes(intervalSec: StrategyIntervalSec): number {
   const now = Math.floor(Date.now() / 1000);
   const boundary = getCandleBoundary(now, intervalSec);
   const secsIntoPeriod = now - boundary;
-  const secsUntilNext = intervalSec - secsIntoPeriod;
-  return Math.ceil((secsUntilNext + (remaining - 1) * intervalSec) / 60);
+  const secsUntilNext =
+    intervalSec === 86400
+      ? getNextEtDayStartUnix(now) - now
+      : intervalSec - secsIntoPeriod;
+  const barSec = intervalSec === 86400 ? 86400 : intervalSec;
+  return Math.ceil((secsUntilNext + (remaining - 1) * barSec) / 60);
 }

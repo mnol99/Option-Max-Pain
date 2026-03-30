@@ -39,6 +39,7 @@ import {
 } from '@/lib/solana-bot/blk-paper';
 import type { InsideBarServerSnapshot } from '@/lib/solana-bot/inside-bar-server-state';
 import { parseApiJson } from '@/lib/solana-bot/parse-api-json';
+import { isWeekendHalt60mEt } from '@/lib/solana-bot/ibit-schedule';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
@@ -46,7 +47,7 @@ const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
-const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v2';
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v3';
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
@@ -680,6 +681,30 @@ export default function TradePage() {
       let st = state[sid];
       if (!st) continue;
 
+      if (sid === 'tf60m' && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
+        if (st.status === 'in_position') {
+          const r = checkPositionExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+          state[sid] = r.newState;
+          if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
+          continue;
+        }
+        if (st.status === 'reversed') {
+          const r = checkReversedExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+          state[sid] = r.newState;
+          if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
+          continue;
+        }
+        if (st.status === 'pattern_detected') {
+          state[sid] = {
+            ...createInitialState(),
+            lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+          };
+          enteringRef.current[sid] = false;
+          breakoutRef.current[sid] = { long: 0, short: 0 };
+        }
+        continue;
+      }
+
       if (st.status === 'pattern_detected' && st.setup && !enteringRef.current[sid]) {
         const setup = st.setup;
         const longBreakout = isBreakoutLong(price, setup);
@@ -866,8 +891,10 @@ export default function TradePage() {
               Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
               Each tab keeps its own state, trade log, and performance ($
               {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar logic runs on
-              the server every few seconds so 5m/10m/60m detection and time exits continue when the tab is
-              backgrounded or the PC sleeps (live mode still uses this browser + wallet).
+              the server every few seconds so 60m/Daily detection and time exits continue when the tab is
+              backgrounded or the PC sleeps (live mode still uses this browser + wallet).{' '}
+              <span className="font-medium">60m</span> pauses Fri 5pm–Sun 3pm ET (flatten open);{' '}
+              <span className="font-medium">Daily</span> runs continuously.
             </>
           )}
         </p>

@@ -83,8 +83,8 @@ function etYearMonthDay(d: Date): { year: number; month: number; day: number } {
   return { year, month, day };
 }
 
-/** Interpret ET calendar date + clock time as UTC instant (handles DST). */
-function etLocalToUtc(year: number, month: number, day: number, hour: number, minute: number): Date {
+/** Start of ET calendar day (00:00) as UTC instant — handles DST. */
+export function etLocalToUtc(year: number, month: number, day: number, hour: number, minute: number): Date {
   const targetMin = hour * 60 + minute;
   let t = Date.UTC(year, month - 1, day, 12, 0, 0);
   for (let i = 0; i < 12; i++) {
@@ -101,4 +101,53 @@ function etLocalToUtc(year: number, month: number, day: number, hour: number, mi
     t += diff * 60 * 1000;
   }
   return new Date(t);
+}
+
+/** Unix seconds at 00:00:00 America/New_York for the ET calendar day containing `instant`. */
+export function getEtDayStartUnix(instant: Date): number {
+  const y = etYearMonthDay(instant);
+  return Math.floor(etLocalToUtc(y.year, y.month, y.day, 0, 0).getTime() / 1000);
+}
+
+/** Start of the next ET midnight after `fromSec` (next calendar day boundary). */
+export function getNextEtDayStartUnix(fromSec: number): number {
+  const startToday = getEtDayStartUnix(new Date(fromSec * 1000));
+  for (let h = 1; h <= 48; h++) {
+    const t = fromSec + h * 3600;
+    const boundary = getEtDayStartUnix(new Date(t * 1000));
+    if (boundary > startToday) return boundary;
+  }
+  return startToday + 86400;
+}
+
+/** ET weekday: 0=Sun … 6=Sat (America/New_York). */
+export function getEtWeekday(instant: Date): number {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: IBIT_TZ,
+    weekday: 'short',
+  });
+  const w = fmt.format(instant);
+  const map: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  return map[w] ?? 0;
+}
+
+/**
+ * 60m strategy weekend halt (ET): closed Fri ≥5:00pm through Sun &lt;3:00pm; open Sun ≥3:00pm through Fri &lt;5:00pm.
+ * Daily strategy ignores this — use only for tf60m.
+ */
+export function isWeekendHalt60mEt(now: Date = new Date()): boolean {
+  const wd = getEtWeekday(now);
+  const min = getEtMinutesFromMidnight(now);
+  if (wd === 6) return true;
+  if (wd === 5 && min >= 17 * 60) return true;
+  if (wd === 0 && min < 15 * 60) return true;
+  return false;
 }

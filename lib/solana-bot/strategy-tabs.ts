@@ -10,10 +10,9 @@ export interface StrategyTabDef {
 }
 
 export const TRADE_STRATEGIES: StrategyTabDef[] = [
-  { id: 'tf5m', intervalSec: 300, label: '5m' },
-  { id: 'tf10m', intervalSec: 600, label: '10m' },
   { id: 'tf60m', intervalSec: 3600, label: '60m' },
-  { id: 'blk', intervalSec: 300, label: 'BLK', kind: 'blk' },
+  { id: 'tf1d', intervalSec: 86400, label: 'Daily' },
+  { id: 'blk', intervalSec: 3600, label: 'BLK', kind: 'blk' },
 ];
 
 /** Multi-timeframe inside-bar strategies only (excludes BLK). */

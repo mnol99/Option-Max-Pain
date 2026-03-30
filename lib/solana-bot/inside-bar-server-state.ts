@@ -1,6 +1,6 @@
 /**
  * Server-side inside-bar simulation: advances on /api/solana-bot/inside-bar/tick
- * so 5m/10m/60m logic keeps running while the browser tab is suspended.
+ * so 60m/Daily inside-bar logic keeps running while the browser tab is suspended.
  */
 
 import { advanceCandlesOnce, getCandles, getWarmupMinutes } from '@/lib/solana-bot/candle-aggregator';

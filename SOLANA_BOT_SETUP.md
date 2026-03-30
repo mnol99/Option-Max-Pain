@@ -1,6 +1,6 @@
 # Solana Trading Bot Setup
 
-The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars (separate tabs on `/trade`), with breakout triggers for Jupiter Perps (short selling supported).
+The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET calendar day)** bars (separate tabs on `/trade`), plus **BLK** for IBIT paper simulation. Breakout triggers target Jupiter Perps (short selling supported). **Daily** candles use **America/New_York** midnight for open/close (DST handled by the runtime). **60m** is halted Fri **5:00pm** ET → Sun **3:00pm** ET (no new signals; open positions flatten at market); **Daily** runs through the weekend.
 
 ## Phase 1: Data + Pattern (Current)
 
@@ -8,14 +8,14 @@ The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars
    - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
    - Uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`). **Public RPCs often return 429** if too many reads hit the same oracle account—use a **free tier from Helius, QuickNode, etc.** Doves reads are throttled in code (~5s min between fetches) with a short stale cache on 429.
    - Optional: `DOVES_MIN_FETCH_INTERVAL_MS` (default 5000), `DOVES_STALE_CACHE_MS` (default 120000).
-   - Candles are built by polling Doves every 15s; first pattern available ~20 min after bot starts
+   - Candles: 60m UTC-hour bars; Daily = ET day bars (see above). First pattern needs 4 completed bars (Daily can take several days of uptime).
 
 2. **Run the app**
    - `npm run dev`
    - Go to [/trade](/trade)
 
 3. **Trade window**
-   - Use the **5m / 10m / 60m** strategy tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**). In **paper** mode, inside-bar simulation also runs **on the server** (POST `/api/solana-bot/inside-bar/tick` every few seconds plus a background heartbeat) so pattern detection and time exits keep advancing if the browser tab sleeps. **Live** mode still depends on this browser + wallet for execution.
+   - Use the **60m**, **Daily**, and **BLK** tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**). In **paper** mode, inside-bar simulation also runs **on the server** (POST `/api/solana-bot/inside-bar/tick` every few seconds plus a background heartbeat) so pattern detection and time exits keep advancing if the browser tab sleeps. **Live** mode still depends on this browser + wallet for execution.
    - Paper-trade simulation: no real execution until Live mode
    - Metrics: PnL, win rate, Sharpe ratio (per tab)
 

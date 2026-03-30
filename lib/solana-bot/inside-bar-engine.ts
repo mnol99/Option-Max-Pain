@@ -14,6 +14,7 @@ import {
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import type { StrategyTabDef } from '@/lib/solana-bot/strategy-tabs';
+import { isWeekendHalt60mEt } from '@/lib/solana-bot/ibit-schedule';
 
 export interface InsideBarRefs {
   entering: Record<string, boolean>;
@@ -124,6 +125,35 @@ export function applyInsideBarPriceTick(
     const sid = s.id;
     let st = state[sid];
     if (!st) continue;
+
+    /** 60m only: Fri ≥5pm ET → Sun &lt;3pm ET — no new trades; flatten open legs. Daily (tf1d) always runs. */
+    if (sid === 'tf60m' && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
+      if (st.status === 'in_position') {
+        const r = checkPositionExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+        state[sid] = r.newState;
+        if (r.closedTrades.length > 0) {
+          newTrades[sid] = enrichClosedTrades(r.closedTrades, positionSizeUsd);
+        }
+        continue;
+      }
+      if (st.status === 'reversed') {
+        const r = checkReversedExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+        state[sid] = r.newState;
+        if (r.closedTrades.length > 0) {
+          newTrades[sid] = enrichClosedTrades(r.closedTrades, positionSizeUsd);
+        }
+        continue;
+      }
+      if (st.status === 'pattern_detected') {
+        state[sid] = {
+          ...createInitialState(),
+          lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+        };
+        refs.entering[sid] = false;
+        refs.breakout[sid] = { long: 0, short: 0 };
+      }
+      continue;
+    }
 
     if (st.status === 'pattern_detected' && st.setup && !refs.entering[sid]) {
       const setup = st.setup;
