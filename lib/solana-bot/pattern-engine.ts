@@ -4,6 +4,7 @@
  */
 
 import type { OHLCVCandle, PatternSetup } from './types';
+import { effectiveBarDurationSec } from '@/lib/solana-bot/candle-intervals';
 
 /**
  * Check if current bar is inside prior bar
@@ -55,7 +56,7 @@ export function detectPattern(
   if (!isInsideBar(current, prior1)) return null;
   if (!isSmallestRange(current, prior1, prior2, prior3)) return null;
 
-  const barSec = barDurationSec ?? inferBarDurationSec(candles);
+  const barSec = effectiveBarDurationSec(barDurationSec ?? inferBarDurationSec(candles));
   const range = current.high - current.low;
   const tick = 0.01; // 1 cent tick for stop levels
 

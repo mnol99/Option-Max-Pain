@@ -9,8 +9,9 @@ import {
   STRATEGY_INTERVALS,
   type StrategyIntervalSec,
   getCandleBoundary,
+  DAILY_BAR_SEC,
 } from './candle-intervals';
-import { getNextEtDayStartUnix } from './ibit-schedule';
+import { getNextEtDaily8pmBarStartUnix } from './ibit-schedule';
 
 interface CurrentCandle {
   unixTime: number;
@@ -123,8 +124,8 @@ export function getWarmupMinutes(intervalSec: StrategyIntervalSec): number {
   const secsIntoPeriod = now - boundary;
   const secsUntilNext =
     intervalSec === 86400
-      ? getNextEtDayStartUnix(now) - now
+      ? getNextEtDaily8pmBarStartUnix(now) - now
       : intervalSec - secsIntoPeriod;
-  const barSec = intervalSec === 86400 ? 86400 : intervalSec;
+  const barSec = intervalSec === 86400 ? DAILY_BAR_SEC : intervalSec;
   return Math.ceil((secsUntilNext + (remaining - 1) * barSec) / 60);
 }

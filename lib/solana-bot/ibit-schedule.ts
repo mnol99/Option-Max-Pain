@@ -109,6 +109,36 @@ export function getEtDayStartUnix(instant: Date): number {
   return Math.floor(etLocalToUtc(y.year, y.month, y.day, 0, 0).getTime() / 1000);
 }
 
+/**
+ * Daily bar for SOL strategy: **8:00 PM ET open** → **7:59:59 PM ET close** next calendar day
+ * (23h 59m 59s). Next bar opens at the following **8:00 PM ET**. DST handled via etLocalToUtc.
+ */
+export const DAILY_BAR_SEC = 86399;
+
+/**
+ * Start unix of the daily bar containing `fromSec`: 8:00 PM ET such that
+ * start ≤ fromSec ≤ start + DAILY_BAR_SEC (close 7:59:59 PM ET next calendar day).
+ */
+export function getEtDaily8pmBarStartUnix(fromSec: number): number {
+  const ymdNow = etYearMonthDay(new Date(fromSec * 1000));
+  const eightToday = Math.floor(
+    etLocalToUtc(ymdNow.year, ymdNow.month, ymdNow.day, 20, 0).getTime() / 1000
+  );
+  if (fromSec >= eightToday && fromSec <= eightToday + DAILY_BAR_SEC) {
+    return eightToday;
+  }
+  const dayStart = getEtDayStartUnix(new Date(fromSec * 1000));
+  const prevInstant = new Date((dayStart - 1) * 1000);
+  const ymdPrev = etYearMonthDay(prevInstant);
+  const eightPrev = Math.floor(
+    etLocalToUtc(ymdPrev.year, ymdPrev.month, ymdPrev.day, 20, 0).getTime() / 1000
+  );
+  if (fromSec >= eightPrev && fromSec <= eightPrev + DAILY_BAR_SEC) {
+    return eightPrev;
+  }
+  return eightToday;
+}
+
 /** Start of the next ET midnight after `fromSec` (next calendar day boundary). */
 export function getNextEtDayStartUnix(fromSec: number): number {
   const startToday = getEtDayStartUnix(new Date(fromSec * 1000));
@@ -118,6 +148,17 @@ export function getNextEtDayStartUnix(fromSec: number): number {
     if (boundary > startToday) return boundary;
   }
   return startToday + 86400;
+}
+
+/** Next 8:00 PM ET strictly after `fromSec` (start of next daily bar). */
+export function getNextEtDaily8pmBarStartUnix(fromSec: number): number {
+  for (let ahead = 0; ahead < 10; ahead++) {
+    const d = new Date((fromSec + ahead * 86400) * 1000);
+    const y = etYearMonthDay(d);
+    const eightPm = Math.floor(etLocalToUtc(y.year, y.month, y.day, 20, 0).getTime() / 1000);
+    if (eightPm > fromSec) return eightPm;
+  }
+  return getEtDaily8pmBarStartUnix(fromSec) + DAILY_BAR_SEC + 1;
 }
 
 /** ET weekday: 0=Sun … 6=Sat (America/New_York). */
