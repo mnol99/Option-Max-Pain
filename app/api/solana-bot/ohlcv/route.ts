@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  advanceCandlesOnce,
   getCandles,
   getCurrentCandleBoundary,
   getWarmupMinutes,
@@ -9,6 +10,7 @@ import { parseIntervalParam } from '@/lib/solana-bot/candle-intervals';
 export async function GET(req: NextRequest) {
   try {
     const intervalSec = parseIntervalParam(req.nextUrl.searchParams.get('interval'));
+    await advanceCandlesOnce();
     const candles = getCandles(intervalSec);
     const now = Math.floor(Date.now() / 1000);
     const warmupMinutes = getWarmupMinutes(intervalSec);

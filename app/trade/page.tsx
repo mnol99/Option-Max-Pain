@@ -37,10 +37,12 @@ import {
   processBlkPaperTick,
   type BlkPaperState,
 } from '@/lib/solana-bot/blk-paper';
+import type { InsideBarServerSnapshot } from '@/lib/solana-bot/inside-bar-server-state';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
+const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v2';
@@ -130,6 +132,11 @@ export default function TradePage() {
   const enteringRef = useRef<Record<string, boolean>>(
     Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, false]))
   );
+  /** Skip one client price tick after switching paper→live (avoid duplicate with server). */
+  const paperSyncSkipRef = useRef(false);
+  const tradesInsideBarRef = useRef<Record<string, ClosedTrade[]>>(
+    Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, [] as ClosedTrade[]]))
+  );
   const stateByStrategyRef = useRef(stateByStrategy);
   const breakoutRef = useRef<Record<string, { long: number; short: number }>>(
     Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
@@ -145,6 +152,12 @@ export default function TradePage() {
   useEffect(() => {
     stateByStrategyRef.current = stateByStrategy;
   }, [stateByStrategy]);
+
+  useEffect(() => {
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      tradesInsideBarRef.current[s.id] = tradesByStrategy[s.id] ?? [];
+    }
+  }, [tradesByStrategy]);
 
   const [sessionHydrated, setSessionHydrated] = useState(false);
 
@@ -448,8 +461,9 @@ export default function TradePage() {
     }
   }, [useChartPrice, candles]);
 
-  // Pattern detection when candles update (each strategy / bar size)
+  // Pattern detection when candles update (each strategy / bar size) — live mode only; paper uses server tick
   useEffect(() => {
+    if (!liveMode) return;
     setStateByStrategy((prev) => {
       let next = prev;
       let changed = false;
@@ -498,10 +512,11 @@ export default function TradePage() {
       }
       return changed ? next : prev;
     });
-  }, [candlesByStrategy]);
+  }, [candlesByStrategy, liveMode]);
 
-  // Price polling — fast if ANY strategy needs it
+  // Price polling — live mode only (paper: server /inside-bar/tick advances simulation)
   useEffect(() => {
+    if (!liveMode) return;
     if (useChartPrice) return;
     const anyActive = INSIDE_BAR_STRATEGIES.some((s) => {
       const st = stateByStrategy[s.id];
@@ -515,11 +530,99 @@ export default function TradePage() {
     fetchPrice();
     const id = setInterval(fetchPrice, ms);
     return () => clearInterval(id);
-  }, [stateByStrategy, fetchPrice, useChartPrice]);
+  }, [stateByStrategy, fetchPrice, useChartPrice, liveMode]);
 
-  // Process price for all strategies (one mutable state copy per tick)
+  /** Paper mode: server-side inside-bar tick (survives browser sleep / tab suspend). */
   useEffect(() => {
+    if (liveMode) return;
+    let cancelled = false;
+
+    const run = async () => {
+      if (cancelled) return;
+      try {
+        const clientSnapshot: Partial<InsideBarServerSnapshot> = {
+          stateByStrategy: { ...stateByStrategyRef.current },
+          entering: Object.fromEntries(
+            INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
+          ),
+          breakout: Object.fromEntries(
+            INSIDE_BAR_STRATEGIES.map((s) => [
+              s.id,
+              { ...breakoutRef.current[s.id] },
+            ])
+          ),
+          tradesByStrategy: Object.fromEntries(
+            INSIDE_BAR_STRATEGIES.map((s) => [s.id, tradesInsideBarRef.current[s.id] ?? []])
+          ),
+        };
+        const res = await fetch('/api/solana-bot/inside-bar/tick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientSnapshot,
+            paperPositionSizeUsd: paperPositionSizeUsd,
+            useChartPrice,
+          }),
+        });
+        const json = await res.json();
+        if (!json.success || !json.data || cancelled) return;
+        const d = json.data as {
+          snapshot: InsideBarServerSnapshot & { lastTickAt: number };
+          price: number;
+          priceTime: number;
+          candlesByStrategy: Record<string, OHLCVCandle[]>;
+          warmupByStrategy: Record<string, number>;
+        };
+        paperSyncSkipRef.current = true;
+        setPrice(d.price);
+        setPriceTime(d.priceTime);
+        setCandlesByStrategy((prev) => ({ ...prev, ...d.candlesByStrategy }));
+        setStateByStrategy(d.snapshot.stateByStrategy);
+        stateByStrategyRef.current = d.snapshot.stateByStrategy;
+        for (const s of INSIDE_BAR_STRATEGIES) {
+          enteringRef.current[s.id] = d.snapshot.entering[s.id] ?? false;
+          breakoutRef.current[s.id] = { ...d.snapshot.breakout[s.id] };
+        }
+        setBreakoutByStrategy(
+          Object.fromEntries(
+            INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...d.snapshot.breakout[s.id] }])
+          )
+        );
+        setTradesByStrategy((prev) => {
+          const next = { ...prev };
+          for (const s of INSIDE_BAR_STRATEGIES) {
+            next[s.id] = d.snapshot.tradesByStrategy[s.id] ?? [];
+          }
+          return next;
+        });
+        setWarmupByStrategy((prev) => ({ ...prev, ...d.warmupByStrategy }));
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Inside-bar server sync failed');
+      }
+    };
+
+    void run();
+    const id = setInterval(run, INSIDE_BAR_SERVER_SYNC_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void run();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [liveMode, paperPositionSizeUsd, useChartPrice]);
+
+  // Process price for all strategies (one mutable state copy per tick) — live mode only
+  useEffect(() => {
+    if (!liveMode) return;
     if (price == null || priceTime == null) return;
+    if (paperSyncSkipRef.current) {
+      paperSyncSkipRef.current = false;
+      return;
+    }
 
     const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
     const state = { ...stateByStrategyRef.current };
@@ -722,7 +825,9 @@ export default function TradePage() {
             <>
               Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
               Each tab keeps its own state, trade log, and performance ($
-              {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode).
+              {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar logic runs on
+              the server every few seconds so 5m/10m/60m detection and time exits continue when the tab is
+              backgrounded or the PC sleeps (live mode still uses this browser + wallet).
             </>
           )}
         </p>

@@ -16,7 +16,6 @@ interface CurrentCandle {
 }
 
 const MAX_COMPLETED = 10;
-const POLL_MS = 15000;
 
 const completedByInterval = new Map<StrategyIntervalSec, OHLCVCandle[]>();
 const currentByInterval = new Map<StrategyIntervalSec, CurrentCandle | null>();
@@ -57,7 +56,12 @@ function rollCandle(
   return next;
 }
 
-async function tick(): Promise<void> {
+/**
+ * One Doves price sample and OHLC update for all intervals.
+ * Call this on every API request / server tick so candles advance even when the
+ * browser tab is suspended (no reliance on a background setInterval).
+ */
+export async function advanceCandlesOnce(): Promise<void> {
   try {
     const { price } = await fetchDovesPrice();
     const now = Math.floor(Date.now() / 1000);
@@ -87,29 +91,20 @@ async function tick(): Promise<void> {
       }
     }
   } catch {
-    // Silently retry on next tick
+    // Silently retry on next call
   }
 }
 
-let pollInterval: ReturnType<typeof setInterval> | null = null;
-
-function startPolling(): void {
-  if (pollInterval) return;
-  tick();
-  pollInterval = setInterval(tick, POLL_MS);
-}
-
 /**
- * Completed candles for a bar size (newest first). Starts polling on first call.
+ * Completed candles for a bar size (newest first). Caller should await
+ * {@link advanceCandlesOnce} first so data is fresh.
  */
 export function getCandles(intervalSec: StrategyIntervalSec): OHLCVCandle[] {
-  startPolling();
   ensureMaps();
   return [...(completedByInterval.get(intervalSec) ?? [])];
 }
 
 export function getCurrentCandleBoundary(intervalSec: number): number {
-  startPolling();
   return getCandleBoundary(Math.floor(Date.now() / 1000), intervalSec);
 }
 
@@ -117,7 +112,6 @@ export function getCurrentCandleBoundary(intervalSec: number): number {
  * Minutes until 4 completed candles exist for pattern detection
  */
 export function getWarmupMinutes(intervalSec: StrategyIntervalSec): number {
-  startPolling();
   ensureMaps();
   const completed = completedByInterval.get(intervalSec) ?? [];
   const count = completed.length;

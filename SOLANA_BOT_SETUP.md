@@ -15,7 +15,7 @@ The SOL trading bot uses the same inside-bar pattern on **5m, 10m, or 60m** bars
    - Go to [/trade](/trade)
 
 3. **Trade window**
-   - Use the **5m / 10m / 60m** strategy tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**)
+   - Use the **5m / 10m / 60m** strategy tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**). In **paper** mode, inside-bar simulation also runs **on the server** (POST `/api/solana-bot/inside-bar/tick` every few seconds plus a background heartbeat) so pattern detection and time exits keep advancing if the browser tab sleeps. **Live** mode still depends on this browser + wallet for execution.
    - Paper-trade simulation: no real execution until Live mode
    - Metrics: PnL, win rate, Sharpe ratio (per tab)
 
