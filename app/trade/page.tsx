@@ -43,6 +43,7 @@ import {
   isWeekendHalt60mEt,
   BLK_COVER_SLOT_COUNT_MORNING,
   BLK_COVER_SLOT_COUNT_AFTERNOON,
+  getEtDayKey,
 } from '@/lib/solana-bot/ibit-schedule';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
@@ -161,6 +162,29 @@ export default function TradePage() {
     setTradesByStrategy((p) => ({ ...p, [BLK_STRATEGY_ID]: [] }));
     setAuditExpanded(new Set());
   }, []);
+
+  /** Keep idle BLK paper sizing in sync with allocation × leverage (no mid-session resize). */
+  useEffect(() => {
+    if (liveMode) return;
+    setBlkPaperState((prev) => {
+      if (prev.status !== 'idle') return prev;
+      const col = paperPositionSizeUsd;
+      const lev = leverage;
+      if (
+        prev.collateralUsd === col &&
+        prev.leverage === lev &&
+        Math.abs(prev.notionalUsd - col * lev) < 1e-6
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        collateralUsd: col,
+        leverage: lev,
+        notionalUsd: col * lev,
+      };
+    });
+  }, [paperPositionSizeUsd, leverage, liveMode]);
   const [btcPrice, setBtcPrice] = useState<number | null>(null);
   const [btcTime, setBtcTime] = useState<number | null>(null);
 
@@ -221,11 +245,33 @@ export default function TradePage() {
       if (p.useChartPrice != null) setUseChartPrice(p.useChartPrice);
       if (p.liveMode != null) setLiveMode(p.liveMode);
       if (p.blkPaperState) {
-        const bs = p.blkPaperState;
+        const bs = p.blkPaperState as BlkPaperState & { lastSessionEtDayKey?: string | null };
         if (bs.coverSliceCount == null && bs.coverScheduleUtc?.length) {
           bs.coverSliceCount = bs.coverScheduleUtc.length;
         }
-        setBlkPaperState(bs);
+        if (bs.lastSessionEtDayKey === undefined) bs.lastSessionEtDayKey = null;
+        if (
+          bs.status === 'short_open' &&
+          bs.lastSessionEtDayKey == null &&
+          bs.entryTime != null
+        ) {
+          bs.lastSessionEtDayKey = getEtDayKey(new Date(bs.entryTime * 1000));
+        }
+        const levHydr = p.leverage ?? 1.5;
+        const colHydr = p.paperPositionSizeUsd ?? 1000;
+        if (bs.collateralUsd == null || bs.leverage == null) {
+          if (bs.status === 'short_open') {
+            // Legacy: notionalUsd was full USD short size at 1× (no separate collateral/leverage)
+            bs.leverage = bs.leverage ?? 1;
+            bs.collateralUsd = bs.notionalUsd ?? colHydr;
+            bs.notionalUsd = bs.collateralUsd * bs.leverage;
+          } else {
+            bs.leverage = bs.leverage ?? levHydr;
+            bs.collateralUsd = colHydr;
+            bs.notionalUsd = bs.collateralUsd * bs.leverage;
+          }
+        }
+        setBlkPaperState(bs as BlkPaperState);
       }
       if (p.entering) {
         for (const s of INSIDE_BAR_STRATEGIES) {
@@ -364,12 +410,17 @@ export default function TradePage() {
     return () => clearInterval(id);
   }, [fetchBtcPrice]);
 
-  /** IBIT poll → paper short $1k BTC when signal (paper only). */
+  /** IBIT poll → paper short (allocation × leverage) when signal; no poll while short open or after one session per ET day. */
   useEffect(() => {
     if (liveMode || btcPrice == null || btcPrice <= 0) return;
     let cancelled = false;
     const run = async () => {
       try {
+        const snap = blkPaperStateRef.current;
+        if (snap.status !== 'idle') return;
+        const todayKey = getEtDayKey(new Date());
+        if (snap.lastSessionEtDayKey != null && snap.lastSessionEtDayKey === todayKey) return;
+
         const res = await fetch('/api/solana-bot/ibit/poll');
         const json = await parseApiJson<{
           success?: boolean;
@@ -384,6 +435,9 @@ export default function TradePage() {
         const price = btcPrice;
         setBlkPaperState((prev) => {
           if (prev.status !== 'idle') return prev;
+          if (prev.lastSessionEtDayKey != null && prev.lastSessionEtDayKey === getEtDayKey(new Date())) {
+            return prev;
+          }
           for (const sig of signals) {
             if (blkProcessedSignalsRef.current.has(sig.txid)) continue;
             blkProcessedSignalsRef.current.add(sig.txid);
@@ -391,12 +445,13 @@ export default function TradePage() {
             const chainBtc =
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc
-                : paperPositionSizeUsd / price;
+                : prev.collateralUsd / price;
             return createBlkShortOpenState(
               price,
               t,
               sig.txid,
-              paperPositionSizeUsd,
+              prev.collateralUsd,
+              prev.leverage,
               chainBtc
             );
           }
@@ -412,7 +467,7 @@ export default function TradePage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [liveMode, btcPrice, paperPositionSizeUsd]);
+  }, [liveMode, btcPrice, paperPositionSizeUsd, leverage]);
 
   /** BLK paper: one process step per effect; loop catches up multiple covers after idle. */
   useEffect(() => {
@@ -1037,7 +1092,13 @@ export default function TradePage() {
                         blkPaperState.status === 'idle' ? 'bg-gray-100' : 'bg-primary-100 text-primary-800'
                       }`}
                     >
-                      {blkPaperState.status === 'idle' ? 'idle (watching IBIT)' : 'short open (covering)'}
+                      {blkPaperState.status === 'idle' &&
+                      blkPaperState.lastSessionEtDayKey != null &&
+                      blkPaperState.lastSessionEtDayKey === getEtDayKey(new Date())
+                        ? 'idle (covered today — no IBIT poll until next ET day)'
+                        : blkPaperState.status === 'idle'
+                          ? 'idle (watching IBIT)'
+                          : 'short open (covering)'}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -1056,7 +1117,8 @@ export default function TradePage() {
                         <span className="text-gray-600">Paper short (sim)</span>
                         <span className="font-mono">
                           {blkPaperState.paperShortBtc.toFixed(6)} BTC (~$
-                          {blkPaperState.notionalUsd.toFixed(0)})
+                          {blkPaperState.notionalUsd.toFixed(0)} notional = ${blkPaperState.collateralUsd.toFixed(0)}{' '}
+                          × {blkPaperState.leverage}×)
                         </span>
                       </div>
                       <div className="flex justify-between">

@@ -123,6 +123,14 @@ export function etLocalToUtc(year: number, month: number, day: number, hour: num
   return new Date(t);
 }
 
+/** Stable ET calendar-day id for comparisons (America/New_York), e.g. `2026-03-27`. */
+export function getEtDayKey(instant: Date): string {
+  const y = etYearMonthDay(instant);
+  const mm = String(y.month).padStart(2, '0');
+  const dd = String(y.day).padStart(2, '0');
+  return `${y.year}-${mm}-${dd}`;
+}
+
 /** Unix seconds at 00:00:00 America/New_York for the ET calendar day containing `instant`. */
 export function getEtDayStartUnix(instant: Date): number {
   const y = etYearMonthDay(instant);

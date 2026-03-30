@@ -1,9 +1,9 @@
 /**
- * BLK paper: IBIT signal → short sized to paper allocation ($) → 18 covers on schedule (10:00–12:50 ET).
- * On-chain main output is recorded for audit only; position BTC = paper USD / entry price.
+ * BLK paper: IBIT signal → short sized to collateral × leverage (USD notional) → covers on schedule.
+ * On-chain main output is recorded for audit only; position BTC = notionalUsd / entry price.
  */
 
-import { getBlkCoverScheduleUtc } from '@/lib/solana-bot/ibit-schedule';
+import { getBlkCoverScheduleUtc, getEtDayKey } from '@/lib/solana-bot/ibit-schedule';
 import type { ClosedTrade } from '@/lib/solana-bot/types';
 import { newTradeId } from '@/lib/solana-bot/trade-state';
 
@@ -14,10 +14,16 @@ export const BLK_COVER_SLICES = 18;
 
 export interface BlkPaperState {
   status: 'idle' | 'short_open';
+  /** ET day (YYYY-MM-DD) of the current/last session — blocks a second signal the same ET day */
+  lastSessionEtDayKey: string | null;
   /** BTC price at entry (Pyth, when signal processed) */
   entryBtc: number | null;
   entryTime: number | null;
-  /** Paper position notional (USD) — user allocation for this strategy */
+  /** Collateral USD for BLK (paper allocation slider) */
+  collateralUsd: number;
+  /** Leverage multiplier at entry */
+  leverage: number;
+  /** Notional USD = collateralUsd × leverage */
   notionalUsd: number;
   /** Main output to Coinbase (BTC) from chain — audit only */
   chainMainOutBtc: number;
@@ -39,12 +45,17 @@ export interface BlkPaperState {
   cumulativePnlUsd: number;
 }
 
-export function createBlkInitialState(): BlkPaperState {
+export function createBlkInitialState(overrides?: Partial<Pick<BlkPaperState, 'lastSessionEtDayKey'>>): BlkPaperState {
+  const lev = 1.5;
+  const col = BLK_DEFAULT_NOTIONAL_USD;
   return {
     status: 'idle',
+    lastSessionEtDayKey: overrides?.lastSessionEtDayKey ?? null,
     entryBtc: null,
     entryTime: null,
-    notionalUsd: BLK_DEFAULT_NOTIONAL_USD,
+    collateralUsd: col,
+    leverage: lev,
+    notionalUsd: col * lev,
     chainMainOutBtc: 0,
     paperShortBtc: 0,
     coverSliceCount: 0,
@@ -61,17 +72,23 @@ export function createBlkShortOpenState(
   btcPrice: number,
   signalTimeSec: number,
   signalTxid: string,
-  notionalUsd: number,
+  collateralUsd: number,
+  leverage: number,
   chainMainOutBtc: number
 ): BlkPaperState {
   const anchor = new Date(signalTimeSec * 1000);
+  const notionalUsd = collateralUsd * leverage;
+  const dayKey = getEtDayKey(anchor);
   const coverScheduleUtc = getBlkCoverScheduleUtc(anchor).map((d) => d.toISOString());
   const coverSliceCount = coverScheduleUtc.length;
   const paperShortBtc = notionalUsd / btcPrice;
   return {
     status: 'short_open',
+    lastSessionEtDayKey: dayKey,
     entryBtc: btcPrice,
     entryTime: signalTimeSec,
+    collateralUsd,
+    leverage,
     notionalUsd,
     chainMainOutBtc,
     paperShortBtc,
@@ -186,7 +203,7 @@ export function processBlkPaperTick(
 
   if (next.nextSliceIndex >= n) {
     return {
-      state: createBlkInitialState(),
+      state: createBlkInitialState({ lastSessionEtDayKey: prev.lastSessionEtDayKey }),
       closedTrades,
     };
   }
