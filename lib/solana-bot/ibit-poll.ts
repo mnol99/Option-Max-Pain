@@ -15,10 +15,12 @@ import {
   getIbitMainOutMinBtc,
   getIbitMinSats,
   getIbitWatchSourceAddresses,
+  isIbitAllowHistoricalBlockDay,
   isIbitStrictFiltersEnabled,
 } from '@/lib/solana-bot/ibit-config';
 import {
   getCoverScheduleUtc,
+  getEtDayStartUnix,
   getEtMinutesFromMidnight,
   IBIT_TZ,
   isBlockTimeInEtMinuteWindow,
@@ -47,8 +49,20 @@ export interface IbitBatchGroup {
   txids: string[];
 }
 
+/**
+ * Require tx block time to fall on **today's** ET calendar day so a 06:53 ET transfer from
+ * months ago does not match every day (time-of-day alone is not enough).
+ */
+function blockTimeIsOnCurrentEtCalendarDay(blockTimeSec: number): boolean {
+  const txDayStart = getEtDayStartUnix(new Date(blockTimeSec * 1000));
+  const todayStart = getEtDayStartUnix(new Date());
+  return txDayStart === todayStart;
+}
+
 function blockTimePassesFilter(blockTimeSec: number): boolean {
   if (blockTimeSec <= 0) return false;
+  const sameEtDayOk =
+    isIbitAllowHistoricalBlockDay() || blockTimeIsOnCurrentEtCalendarDay(blockTimeSec);
   if (isIbitStrictFiltersEnabled()) {
     const inBatchWindow = isBlockTimeInEtMinuteWindow(
       blockTimeSec,
@@ -58,7 +72,7 @@ function blockTimePassesFilter(blockTimeSec: number): boolean {
     /** Daytime (≥10:00 ET): afternoon cover schedule; still require main-output band elsewhere. */
     const m = getEtMinutesFromMidnight(new Date(blockTimeSec * 1000));
     const daytimeAfter10 = m >= 10 * 60;
-    return inBatchWindow || daytimeAfter10;
+    return sameEtDayOk && (inBatchWindow || daytimeAfter10);
   }
   const d = new Date(blockTimeSec * 1000);
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -70,7 +84,7 @@ function blockTimePassesFilter(blockTimeSec: number): boolean {
   const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
   const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
   const minutes = hour * 60 + minute;
-  return minutes >= 2 * 60 && minutes < 9 * 60 + 30;
+  return sameEtDayOk && minutes >= 2 * 60 && minutes < 9 * 60 + 30;
 }
 
 function mainOutputPassesStrictBand(mainOutSats: number): boolean {

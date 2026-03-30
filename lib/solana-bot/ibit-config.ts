@@ -126,3 +126,11 @@ export function getIbitExtraTxids(): string[] {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
+
+/**
+ * When `1`, block-time filters do not require the tx to be on **today's** ET calendar day
+ * (allows replaying historical txs from `IBIT_EXTRA_TXIDS` / address history for testing).
+ */
+export function isIbitAllowHistoricalBlockDay(): boolean {
+  return process.env.IBIT_ALLOW_HISTORICAL_SIGNALS === '1';
+}
