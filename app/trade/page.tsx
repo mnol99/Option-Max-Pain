@@ -152,6 +152,15 @@ export default function TradePage() {
   const blkPaperStateRef = useRef(blkPaperState);
   blkPaperStateRef.current = blkPaperState;
   const blkProcessedSignalsRef = useRef<Set<string>>(new Set());
+
+  const clearBlkPaperHistory = useCallback(() => {
+    const fresh = createBlkInitialState();
+    blkPaperStateRef.current = fresh;
+    setBlkPaperState(fresh);
+    blkProcessedSignalsRef.current = new Set();
+    setTradesByStrategy((p) => ({ ...p, [BLK_STRATEGY_ID]: [] }));
+    setAuditExpanded(new Set());
+  }, []);
   const [btcPrice, setBtcPrice] = useState<number | null>(null);
   const [btcTime, setBtcTime] = useState<number | null>(null);
 
@@ -1084,6 +1093,28 @@ export default function TradePage() {
                       )}
                     </>
                   )}
+                  <div className="pt-2 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          typeof window !== 'undefined' &&
+                          !window.confirm(
+                            'Clear BLK trade log, performance, and session state? (60m/Daily tabs are unchanged.)'
+                          )
+                        ) {
+                          return;
+                        }
+                        clearBlkPaperHistory();
+                      }}
+                      className="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                    >
+                      Clear BLK log &amp; start fresh
+                    </button>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Resets paper BLK trades, metrics, and processed signal ids so past txids can signal again.
+                    </p>
+                  </div>
                   <p className="text-xs text-gray-500">
                     Paper only. Live mode does not auto-trade BLK here.
                   </p>
