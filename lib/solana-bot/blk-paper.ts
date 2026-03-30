@@ -1,5 +1,6 @@
 /**
- * BLK paper: IBIT signal → simulated short sized to on-chain BTC to Coinbase → 18 cover round-turns (10:00–12:50 ET).
+ * BLK paper: IBIT signal → short sized to paper allocation ($) → 18 covers on schedule (10:00–12:50 ET).
+ * On-chain main output is recorded for audit only; position BTC = paper USD / entry price.
  */
 
 import { getBlkCoverScheduleUtc } from '@/lib/solana-bot/ibit-schedule';
@@ -15,10 +16,12 @@ export interface BlkPaperState {
   /** BTC price at entry (Pyth, when signal processed) */
   entryBtc: number | null;
   entryTime: number | null;
-  /** Reference notional (USD) for UI; cover size is on-chain BTC ÷ 18 */
+  /** Paper position notional (USD) — user allocation for this strategy */
   notionalUsd: number;
-  /** Main output to Coinbase Prime (BTC) — sizes the session short */
+  /** Main output to Coinbase (BTC) from chain — audit only */
   chainMainOutBtc: number;
+  /** Simulated short size in BTC = notionalUsd / entryBtc */
+  paperShortBtc: number;
   /** Groups open leg + 18 covers in the trade log */
   sessionId: string | null;
   /** After first tick: session-open row already appended */
@@ -40,6 +43,7 @@ export function createBlkInitialState(): BlkPaperState {
     entryTime: null,
     notionalUsd: BLK_DEFAULT_NOTIONAL_USD,
     chainMainOutBtc: 0,
+    paperShortBtc: 0,
     sessionId: null,
     sessionOpenEmitted: false,
     coverScheduleUtc: [],
@@ -58,12 +62,14 @@ export function createBlkShortOpenState(
 ): BlkPaperState {
   const anchor = new Date(signalTimeSec * 1000);
   const coverScheduleUtc = getBlkCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const paperShortBtc = notionalUsd / btcPrice;
   return {
     status: 'short_open',
     entryBtc: btcPrice,
     entryTime: signalTimeSec,
     notionalUsd,
     chainMainOutBtc,
+    paperShortBtc,
     sessionId: newTradeId(),
     sessionOpenEmitted: false,
     coverScheduleUtc,
@@ -94,7 +100,7 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
     pnl: 0,
     pnlPercent: 0,
     pnlUsd: 0,
-    btcAmount: prev.chainMainOutBtc,
+    btcAmount: prev.paperShortBtc,
     asset: 'btc',
     ibitSignalTxid: prev.signalTxid ?? undefined,
     blkSessionId: id,
@@ -103,7 +109,7 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
 }
 
 /**
- * On each price tick: emit session open once, then each due cover slice as its own round-turn (short + cover).
+ * One tick: emit session open once, then at most **one** cover whose slot has passed (distinct time/price per slice).
  */
 export function processBlkPaperTick(
   prev: BlkPaperState,
@@ -115,7 +121,7 @@ export function processBlkPaperTick(
   }
 
   const entry = prev.entryBtc;
-  const sliceBtc = prev.chainMainOutBtc / BLK_COVER_SLICES;
+  const sliceBtc = prev.paperShortBtc / BLK_COVER_SLICES;
   const sliceUsd = sliceBtc * entry;
   const closedTrades: ClosedTrade[] = [];
   let next: BlkPaperState = { ...prev };
@@ -124,50 +130,57 @@ export function processBlkPaperTick(
   if (!next.sessionOpenEmitted) {
     closedTrades.push(sessionOpenTrade(next));
     next = { ...next, sessionOpenEmitted: true };
-  }
-
-  while (
-    next.nextSliceIndex < BLK_COVER_SLICES &&
-    next.coverScheduleUtc[next.nextSliceIndex] != null
-  ) {
-    const slotUtc = Date.parse(next.coverScheduleUtc[next.nextSliceIndex]!);
-    if (nowSec * 1000 < slotUtc) break;
-
-    const legPnlUsd = (entry - btcPrice) * sliceBtc;
-    cumulative += legPnlUsd;
-    const pnlPercent = (legPnlUsd / sliceUsd) * 100;
-    const idx = next.nextSliceIndex;
-    next.nextSliceIndex += 1;
-
-    closedTrades.push({
-      id: newTradeId(),
-      side: 'short',
-      entryPrice: entry,
-      entryTime: next.entryTime!,
-      exitPrice: btcPrice,
-      exitTime: nowSec,
-      exitReason: 'blk_cover',
-      liquidationPrice: entry,
-      pnl: legPnlUsd,
-      pnlPercent,
-      pnlUsd: legPnlUsd,
-      btcAmount: sliceBtc,
-      asset: 'btc',
-      ibitSignalTxid: next.signalTxid ?? undefined,
-      blkSessionId: next.sessionId ?? undefined,
-      blkSliceIndex: idx,
-    });
-  }
-
-  next.cumulativePnlUsd = cumulative;
-
-  if (next.nextSliceIndex < BLK_COVER_SLICES) {
     return { state: next, closedTrades };
   }
 
-  // All slices covered — reset session
-  return {
-    state: createBlkInitialState(),
-    closedTrades,
-  };
+  if (next.nextSliceIndex >= BLK_COVER_SLICES) {
+    return { state: next, closedTrades: [] };
+  }
+
+  const slotIso = next.coverScheduleUtc[next.nextSliceIndex];
+  if (slotIso == null) {
+    return { state: next, closedTrades: [] };
+  }
+
+  const slotEndMs = Date.parse(slotIso);
+  if (nowSec * 1000 < slotEndMs) {
+    return { state: next, closedTrades: [] };
+  }
+
+  const legPnlUsd = (entry - btcPrice) * sliceBtc;
+  cumulative += legPnlUsd;
+  const pnlPercent = sliceUsd > 0 ? (legPnlUsd / sliceUsd) * 100 : 0;
+  const idx = next.nextSliceIndex;
+  const coverExitTimeSec = Math.floor(slotEndMs / 1000);
+
+  next.nextSliceIndex += 1;
+  next.cumulativePnlUsd = cumulative;
+
+  closedTrades.push({
+    id: newTradeId(),
+    side: 'short',
+    entryPrice: entry,
+    entryTime: next.entryTime!,
+    exitPrice: btcPrice,
+    exitTime: coverExitTimeSec,
+    exitReason: 'blk_cover',
+    liquidationPrice: entry,
+    pnl: legPnlUsd,
+    pnlPercent,
+    pnlUsd: legPnlUsd,
+    btcAmount: sliceBtc,
+    asset: 'btc',
+    ibitSignalTxid: next.signalTxid ?? undefined,
+    blkSessionId: next.sessionId ?? undefined,
+    blkSliceIndex: idx,
+  });
+
+  if (next.nextSliceIndex >= BLK_COVER_SLICES) {
+    return {
+      state: createBlkInitialState(),
+      closedTrades,
+    };
+  }
+
+  return { state: next, closedTrades };
 }

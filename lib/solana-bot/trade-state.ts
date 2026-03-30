@@ -611,6 +611,15 @@ export function computeMetrics(trades: ClosedTrade[]): TradeMetrics {
   };
 }
 
+function blkFeeNotionalUsd(t: ClosedTrade): number {
+  if (t.exitReason === 'blk_open' || t.exitReason === 'blk_cover') {
+    if (t.btcAmount != null && t.entryPrice > 0) {
+      return t.btcAmount * t.entryPrice;
+    }
+  }
+  return closedTradeNotionalUsd(t);
+}
+
 /** BLK: metrics from cover round-turns only; session-open row is informational (0 PnL). */
 export function computeBlkMetrics(trades: ClosedTrade[]): TradeMetrics {
   const covers = trades.filter((t) => t.exitReason === 'blk_cover');
@@ -631,7 +640,7 @@ export function computeBlkMetrics(trades: ClosedTrade[]): TradeMetrics {
   if (covers.length === 0 && opens.length > 0) {
     let estimatedTotalFeesUsd = 0;
     for (const t of opens) {
-      estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+      estimatedTotalFeesUsd += 2 * blkFeeNotionalUsd(t) * feeRate;
     }
     return {
       totalTrades: 0,
@@ -659,10 +668,10 @@ export function computeBlkMetrics(trades: ClosedTrade[]): TradeMetrics {
 
   let estimatedTotalFeesUsd = 0;
   for (const t of covers) {
-    estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+    estimatedTotalFeesUsd += 2 * blkFeeNotionalUsd(t) * feeRate;
   }
   for (const t of opens) {
-    estimatedTotalFeesUsd += 2 * closedTradeNotionalUsd(t) * feeRate;
+    estimatedTotalFeesUsd += 2 * blkFeeNotionalUsd(t) * feeRate;
   }
   const feeLegCount = covers.length * 2 + opens.length * 2;
 

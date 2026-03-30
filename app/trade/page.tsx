@@ -318,8 +318,10 @@ export default function TradePage() {
     for (const s of TRADE_STRATEGIES) {
       liveAmountByStrategyRef.current[s.id] = liveAmountToRun;
     }
-    liveAmountByStrategyRef.current[BLK_STRATEGY_ID] = BLK_DEFAULT_NOTIONAL_USD;
-  }, [liveAmountToRun]);
+    liveAmountByStrategyRef.current[BLK_STRATEGY_ID] = liveMode
+      ? liveAmountToRun
+      : paperPositionSizeUsd;
+  }, [liveAmountToRun, liveMode, paperPositionSizeUsd]);
 
   const fetchBtcPrice = useCallback(async () => {
     try {
@@ -369,8 +371,14 @@ export default function TradePage() {
             const chainBtc =
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc
-                : BLK_DEFAULT_NOTIONAL_USD / price;
-            return createBlkShortOpenState(price, t, sig.txid, chainBtc * price, chainBtc);
+                : paperPositionSizeUsd / price;
+            return createBlkShortOpenState(
+              price,
+              t,
+              sig.txid,
+              paperPositionSizeUsd,
+              chainBtc
+            );
           }
           return prev;
         });
@@ -384,16 +392,23 @@ export default function TradePage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [liveMode, btcPrice]);
+  }, [liveMode, btcPrice, paperPositionSizeUsd]);
 
-  /** BLK paper: cover slices on BTC ticks. */
+  /** BLK paper: one process step per effect; loop catches up multiple covers after idle. */
   useEffect(() => {
     if (liveMode || btcPrice == null || btcTime == null) return;
-    const prev = blkPaperStateRef.current;
-    const { state: next, closedTrades } = processBlkPaperTick(prev, btcPrice, btcTime);
-    if (next !== prev) setBlkPaperState(next);
-    if (closedTrades.length > 0) {
-      const enriched = closedTrades.map((t) => ({ ...t, asset: 'btc' as const }));
+    let prev = blkPaperStateRef.current;
+    const batch: ClosedTrade[] = [];
+    for (let step = 0; step < 24; step++) {
+      const { state: next, closedTrades } = processBlkPaperTick(prev, btcPrice, btcTime);
+      prev = next;
+      if (closedTrades.length === 0) break;
+      batch.push(...closedTrades);
+    }
+    blkPaperStateRef.current = prev;
+    setBlkPaperState(prev);
+    if (batch.length > 0) {
+      const enriched = batch.map((t) => ({ ...t, asset: 'btc' as const }));
       setTradesByStrategy((p) => ({
         ...p,
         [BLK_STRATEGY_ID]: [...enriched.reverse(), ...(p[BLK_STRATEGY_ID] ?? [])],
@@ -840,9 +855,9 @@ export default function TradePage() {
         <p className="text-sm text-gray-600 mb-4">
           {isBlkTab ? (
             <>
-              <span className="font-semibold">BLK</span> — on-chain transfer size (main output to Coinbase)
-              sizes the session short; covers are {BLK_COVER_SLICES} equal BTC slices (on-chain BTC ÷{' '}
-              {BLK_COVER_SLICES}, round-turn PnL per slice). Covers{' '}
+              <span className="font-semibold">BLK</span> — paper short = your position size ($
+              {paperPositionSizeUsd.toFixed(0)}); on-chain BTC to Coinbase is shown for signal context only.
+              {BLK_COVER_SLICES} cover slices (equal BTC each), one per scheduled slot. Covers{' '}
               <span className="font-semibold">10:00–12:50 ET</span>. Pyth BTC price. Signals from{' '}
               <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
@@ -990,7 +1005,14 @@ export default function TradePage() {
                         <span className="font-mono">${formatPrice(blkPaperState.entryBtc)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">On-chain to CB (short size)</span>
+                        <span className="text-gray-600">Paper short (sim)</span>
+                        <span className="font-mono">
+                          {blkPaperState.paperShortBtc.toFixed(6)} BTC (~$
+                          {blkPaperState.notionalUsd.toFixed(0)})
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">On-chain to CB (signal)</span>
                         <span className="font-mono">
                           {blkPaperState.chainMainOutBtc.toFixed(4)} BTC
                         </span>
@@ -998,13 +1020,7 @@ export default function TradePage() {
                       <div className="flex justify-between">
                         <span className="text-gray-600">Per cover slice (BTC)</span>
                         <span className="font-mono">
-                          {(blkPaperState.chainMainOutBtc / BLK_COVER_SLICES).toFixed(6)} BTC
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Ref. notional (short × Pyth)</span>
-                        <span className="font-mono">
-                          ${(blkPaperState.chainMainOutBtc * blkPaperState.entryBtc).toFixed(0)}
+                          {(blkPaperState.paperShortBtc / BLK_COVER_SLICES).toFixed(6)} BTC
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -1238,7 +1254,7 @@ export default function TradePage() {
                         </span>
                         <span className="text-gray-500 text-xs">
                           {t.exitReason === 'blk_open'
-                            ? 'short (chain size)'
+                            ? 'short (paper size)'
                             : t.exitReason === 'blk_cover'
                               ? 'round-turn'
                               : t.exitReason}
@@ -1248,15 +1264,21 @@ export default function TradePage() {
                         {t.exitReason === 'blk_open' ? (
                           <>
                             <p className="text-gray-700">
-                              Short <span className="font-mono">{t.btcAmount?.toFixed(4)} BTC</span> @{' '}
+                              Short <span className="font-mono">{t.btcAmount?.toFixed(6)} BTC</span> @{' '}
                               <span className="font-mono">${formatPrice(t.entryPrice)}</span>
                               <span className="text-gray-500 font-mono text-xs ml-2">
                                 {formatTime(t.entryTime)}
                               </span>
                             </p>
+                            {t.chainMainOutBtc != null && t.chainMainOutBtc > 0 && (
+                              <p className="text-xs text-gray-500">
+                                Signal on-chain to Coinbase (main output):{' '}
+                                <span className="font-mono">{t.chainMainOutBtc.toFixed(4)} BTC</span> — paper
+                                size uses your position $ above.
+                              </p>
+                            )}
                             <p className="text-xs text-gray-500">
-                              Mirrors main output to Coinbase on the signal tx (on-chain size). PnL accrues on
-                              cover rows below.
+                              PnL accrues on cover rows below (one row per 10m slot).
                             </p>
                           </>
                         ) : (
