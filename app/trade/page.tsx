@@ -47,7 +47,7 @@ const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
-const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v3';
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v4';
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {

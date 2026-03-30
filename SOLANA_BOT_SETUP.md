@@ -1,6 +1,6 @@
 # Solana Trading Bot Setup
 
-The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET calendar day)** bars (separate tabs on `/trade`), plus **BLK** for IBIT paper simulation. Breakout triggers target Jupiter Perps (short selling supported). **Daily** candles use **America/New_York** midnight for open/close (DST handled by the runtime). **60m** is halted Fri **5:00pm** ET → Sun **3:00pm** ET (no new signals; open positions flatten at market); **Daily** runs through the weekend.
+The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET calendar day)** bars (separate tabs on `/trade`), plus **BLK** for IBIT paper simulation. Breakout triggers target Jupiter Perps (short selling supported). **Daily** candles: **open 8:00 PM ET**, **close 7:59:59 PM ET** the next calendar day (23h 59m 59s bar); next bar opens at **8:00 PM ET** again. DST is handled via the same ET→UTC conversion as the rest of the app. **60m** is halted Fri **5:00pm** ET → Sun **3:00pm** ET (no new signals; open positions flatten at market); **Daily** runs through the weekend.
 
 ## Phase 1: Data + Pattern (Current)
 
