@@ -654,8 +654,9 @@ export function computeBlkMetrics(trades: ClosedTrade[]): TradeMetrics {
     };
   }
   const total = covers.length;
-  const wins = covers.filter((t) => (t.pnlUsd ?? t.pnl) > 0).length;
-  const losses = covers.filter((t) => (t.pnlUsd ?? t.pnl) <= 0).length;
+  const blkPnlUsd = (t: ClosedTrade) => t.pnlUsd ?? t.pnl;
+  const wins = covers.filter((t) => Math.round(blkPnlUsd(t) * 100) / 100 > 0).length;
+  const losses = covers.filter((t) => Math.round(blkPnlUsd(t) * 100) / 100 < 0).length;
   const totalPnl = covers.reduce((s, t) => s + (t.pnlUsd != null ? t.pnlUsd : t.pnl), 0);
   const returns = covers.map((t) => t.pnlPercent / 100);
   const mean = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;

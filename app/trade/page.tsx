@@ -1255,7 +1255,7 @@ export default function TradePage() {
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade Log</h2>
                   <p className="text-xs text-gray-500 mb-3">
                 {isBlkTab
-                  ? 'Session open (chain-sized short) then 18 cover round-turns (short + buy per slice) with PnL each.'
+                  ? 'Session open (paper short) then 18 cover round-turns (short + buy per slice) with PnL each.'
                   : 'Entry: SOL amount @ price · time · Exit: price · time · PnL'}
               </p>
               <div className="max-h-80 overflow-y-auto space-y-3">
@@ -1293,7 +1293,8 @@ export default function TradePage() {
                             <p className="text-gray-700">
                               Short <span className="font-mono">{t.btcAmount?.toFixed(6)} BTC</span> @{' '}
                               <span className="font-mono">${formatPrice(t.entryPrice)}</span>
-                              <span className="text-gray-500 font-mono text-xs ml-2">
+                              <span className="text-gray-500 font-mono text-xs">
+                                {' · '}
                                 {formatTime(t.entryTime)}
                               </span>
                             </p>
