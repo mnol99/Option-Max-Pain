@@ -27,6 +27,15 @@ export async function fetchAddressTxs(address: string, limit = 25): Promise<Bloc
   return Array.isArray(json) ? json.slice(0, limit) : [];
 }
 
+/** Single tx by id (for IBIT_EXTRA_TXIDS / manual Arkham txids). */
+export async function fetchTx(txid: string): Promise<BlockstreamTxRef | null> {
+  const url = `${baseUrl()}/tx/${encodeURIComponent(txid)}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) return null;
+  const json = (await res.json()) as BlockstreamTxRef;
+  return json?.txid ? json : null;
+}
+
 export function sumToAddresses(
   tx: BlockstreamTxRef,
   destinationSet: Set<string>

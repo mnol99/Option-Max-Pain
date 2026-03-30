@@ -42,13 +42,33 @@ export function getCoverScheduleUtc(anchorUtc: Date): Date[] {
   return slots;
 }
 
-/** BLK paper: 18 slots 10:00–12:50 ET (every 10m), same calendar day as anchor. */
-export const BLK_COVER_SLOT_COUNT = 18;
+/** Morning batch: 18 slots 10:00–12:50 ET (every 10m), same calendar day as anchor. */
+export const BLK_COVER_SLOT_COUNT_MORNING = 18;
 
+/** Afternoon batch (signal after 10:00 ET same day): 6 slots 15:00–15:50 ET (3:00–3:50pm), covers 3–4pm window. */
+export const BLK_COVER_SLOT_COUNT_AFTERNOON = 6;
+
+/** Minutes from midnight ET in [start, end) → use afternoon cover schedule. */
+export function blkUsesAfternoonCoverScheduleEt(anchorUtc: Date): boolean {
+  const m = getEtMinutesFromMidnight(anchorUtc);
+  return m >= 10 * 60;
+}
+
+/**
+ * BLK cover schedule (ET, same calendar day as signal anchor time).
+ * - Signal **before 10:00 ET**: covers **10:00–12:50 ET** (18 × 10m).
+ * - Signal **from 10:00 ET onward** (daytime): covers **15:00–15:50 ET** (6 × 10m) to close 3–4pm.
+ */
 export function getBlkCoverScheduleUtc(anchorUtc: Date): Date[] {
   const y = etYearMonthDay(anchorUtc);
   const slots: Date[] = [];
-  for (let i = 0; i < BLK_COVER_SLOT_COUNT; i++) {
+  if (blkUsesAfternoonCoverScheduleEt(anchorUtc)) {
+    for (let i = 0; i < BLK_COVER_SLOT_COUNT_AFTERNOON; i++) {
+      slots.push(etLocalToUtc(y.year, y.month, y.day, 15, i * 10));
+    }
+    return slots;
+  }
+  for (let i = 0; i < BLK_COVER_SLOT_COUNT_MORNING; i++) {
     slots.push(etLocalToUtc(y.year, y.month, y.day, 10, i * 10));
   }
   return slots;

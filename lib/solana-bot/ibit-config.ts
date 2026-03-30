@@ -113,3 +113,16 @@ export function getIbitMainOutMaxBtc(): number | null {
   if (Number.isFinite(n) && n > 0) return n;
   return null;
 }
+
+/**
+ * Extra txids to always fetch (comma-separated), e.g. Arkham transfers not yet in watch-address history.
+ * Example: `IBIT_EXTRA_TXIDS=d6c82b60949803cf773342deb961a63eabc6228b2432420c5cda84527c79d585`
+ */
+export function getIbitExtraTxids(): string[] {
+  const raw = process.env.IBIT_EXTRA_TXIDS?.trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}

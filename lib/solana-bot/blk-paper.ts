@@ -9,6 +9,7 @@ import { newTradeId } from '@/lib/solana-bot/trade-state';
 
 export const BLK_STRATEGY_ID = 'blk';
 export const BLK_DEFAULT_NOTIONAL_USD = 1000;
+/** Max slices (morning schedule); afternoon uses 6. */
 export const BLK_COVER_SLICES = 18;
 
 export interface BlkPaperState {
@@ -22,13 +23,15 @@ export interface BlkPaperState {
   chainMainOutBtc: number;
   /** Simulated short size in BTC = notionalUsd / entryBtc */
   paperShortBtc: number;
-  /** Groups open leg + 18 covers in the trade log */
+  /** Covers this session (18 morning vs 6 afternoon) */
+  coverSliceCount: number;
+  /** Groups open leg + covers in the trade log */
   sessionId: string | null;
   /** After first tick: session-open row already appended */
   sessionOpenEmitted: boolean;
-  /** ISO times for 18 covers (ET calendar day of signal) */
+  /** ISO times for cover slots (ET calendar day of signal) */
   coverScheduleUtc: string[];
-  /** Next slice index 0..17 */
+  /** Next slice index */
   nextSliceIndex: number;
   /** Signal txid for this session */
   signalTxid: string | null;
@@ -44,6 +47,7 @@ export function createBlkInitialState(): BlkPaperState {
     notionalUsd: BLK_DEFAULT_NOTIONAL_USD,
     chainMainOutBtc: 0,
     paperShortBtc: 0,
+    coverSliceCount: 0,
     sessionId: null,
     sessionOpenEmitted: false,
     coverScheduleUtc: [],
@@ -62,6 +66,7 @@ export function createBlkShortOpenState(
 ): BlkPaperState {
   const anchor = new Date(signalTimeSec * 1000);
   const coverScheduleUtc = getBlkCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const coverSliceCount = coverScheduleUtc.length;
   const paperShortBtc = notionalUsd / btcPrice;
   return {
     status: 'short_open',
@@ -70,6 +75,7 @@ export function createBlkShortOpenState(
     notionalUsd,
     chainMainOutBtc,
     paperShortBtc,
+    coverSliceCount,
     sessionId: newTradeId(),
     sessionOpenEmitted: false,
     coverScheduleUtc,
@@ -105,6 +111,7 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
     ibitSignalTxid: prev.signalTxid ?? undefined,
     blkSessionId: id,
     chainMainOutBtc: prev.chainMainOutBtc,
+    blkCoverSliceTotal: prev.coverSliceCount,
   };
 }
 
@@ -121,7 +128,8 @@ export function processBlkPaperTick(
   }
 
   const entry = prev.entryBtc;
-  const sliceBtc = prev.paperShortBtc / BLK_COVER_SLICES;
+  const n = Math.max(1, prev.coverSliceCount || prev.coverScheduleUtc.length);
+  const sliceBtc = prev.paperShortBtc / n;
   const sliceUsd = sliceBtc * entry;
   const closedTrades: ClosedTrade[] = [];
   let next: BlkPaperState = { ...prev };
@@ -133,7 +141,7 @@ export function processBlkPaperTick(
     return { state: next, closedTrades };
   }
 
-  if (next.nextSliceIndex >= BLK_COVER_SLICES) {
+  if (next.nextSliceIndex >= n) {
     return { state: next, closedTrades: [] };
   }
 
@@ -173,9 +181,10 @@ export function processBlkPaperTick(
     ibitSignalTxid: next.signalTxid ?? undefined,
     blkSessionId: next.sessionId ?? undefined,
     blkSliceIndex: idx,
+    blkCoverSliceTotal: n,
   });
 
-  if (next.nextSliceIndex >= BLK_COVER_SLICES) {
+  if (next.nextSliceIndex >= n) {
     return {
       state: createBlkInitialState(),
       closedTrades,

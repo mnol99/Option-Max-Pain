@@ -39,7 +39,11 @@ import {
 } from '@/lib/solana-bot/blk-paper';
 import type { InsideBarServerSnapshot } from '@/lib/solana-bot/inside-bar-server-state';
 import { parseApiJson } from '@/lib/solana-bot/parse-api-json';
-import { isWeekendHalt60mEt } from '@/lib/solana-bot/ibit-schedule';
+import {
+  isWeekendHalt60mEt,
+  BLK_COVER_SLOT_COUNT_MORNING,
+  BLK_COVER_SLOT_COUNT_AFTERNOON,
+} from '@/lib/solana-bot/ibit-schedule';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
@@ -47,7 +51,7 @@ const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
-const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v4';
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v5';
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
@@ -207,7 +211,13 @@ export default function TradePage() {
       if (p.leverage != null) setLeverage(p.leverage);
       if (p.useChartPrice != null) setUseChartPrice(p.useChartPrice);
       if (p.liveMode != null) setLiveMode(p.liveMode);
-      if (p.blkPaperState) setBlkPaperState(p.blkPaperState);
+      if (p.blkPaperState) {
+        const bs = p.blkPaperState;
+        if (bs.coverSliceCount == null && bs.coverScheduleUtc?.length) {
+          bs.coverSliceCount = bs.coverScheduleUtc.length;
+        }
+        setBlkPaperState(bs);
+      }
       if (p.entering) {
         for (const s of INSIDE_BAR_STRATEGIES) {
           enteringRef.current[s.id] = p.entering[s.id] ?? false;
@@ -882,8 +892,10 @@ export default function TradePage() {
             <>
               <span className="font-semibold">BLK</span> — paper short = your position size ($
               {paperPositionSizeUsd.toFixed(0)}); on-chain BTC to Coinbase is shown for signal context only.
-              {BLK_COVER_SLICES} cover slices (equal BTC each), one per scheduled slot. Covers{' '}
-              <span className="font-semibold">10:00–12:50 ET</span>. Pyth BTC price. Signals from{' '}
+              {BLK_COVER_SLOT_COUNT_MORNING} covers <span className="font-semibold">10:00–12:50 ET</span> if the
+              signal is before 10am ET;{' '}
+              {BLK_COVER_SLOT_COUNT_AFTERNOON} covers <span className="font-semibold">3:00–3:50 ET</span> if the
+              signal is from 10am onward (same day). Pyth BTC. Signals from{' '}
               <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
           ) : (
@@ -1047,13 +1059,22 @@ export default function TradePage() {
                       <div className="flex justify-between">
                         <span className="text-gray-600">Per cover slice (BTC)</span>
                         <span className="font-mono">
-                          {(blkPaperState.paperShortBtc / BLK_COVER_SLICES).toFixed(6)} BTC
+                          {(
+                            blkPaperState.paperShortBtc /
+                            Math.max(1, blkPaperState.coverSliceCount || BLK_COVER_SLICES)
+                          ).toFixed(6)}{' '}
+                          BTC
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Cover progress</span>
                         <span className="font-mono">
-                          {blkPaperState.nextSliceIndex}/{BLK_COVER_SLICES} slices (10:00–12:50 ET)
+                          {blkPaperState.nextSliceIndex}/
+                          {Math.max(1, blkPaperState.coverSliceCount || BLK_COVER_SLICES)} slices (
+                          {blkPaperState.coverSliceCount === BLK_COVER_SLOT_COUNT_AFTERNOON
+                            ? '3:00–4:00 ET'
+                            : '10:00–12:50 ET'}
+                          )
                         </span>
                       </div>
                       {blkPaperState.signalTxid && (
@@ -1276,7 +1297,9 @@ export default function TradePage() {
                           {t.exitReason === 'blk_open'
                             ? 'SESSION OPEN'
                             : t.exitReason === 'blk_cover'
-                              ? `COVER ${t.blkSliceIndex != null ? t.blkSliceIndex + 1 : '?'}/${BLK_COVER_SLICES}`
+                              ? `COVER ${t.blkSliceIndex != null ? t.blkSliceIndex + 1 : '?'}/${
+                                  t.blkCoverSliceTotal ?? BLK_COVER_SLICES
+                                }`
                               : t.side?.toUpperCase()}
                         </span>
                         <span className="text-gray-500 text-xs">

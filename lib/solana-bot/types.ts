@@ -87,8 +87,10 @@ export interface ClosedTrade {
   ibitSignalTxid?: string;
   /** BLK: group id for one IBIT session (open + 18 covers) */
   blkSessionId?: string;
-  /** BLK cover slice 0..17 (exitReason blk_cover) */
+  /** BLK cover slice index (exitReason blk_cover) */
   blkSliceIndex?: number;
+  /** BLK: total cover slices this session (18 morning / 6 afternoon) */
+  blkCoverSliceTotal?: number;
   /** BTC observed on-chain to Coinbase (main output); session short size */
   chainMainOutBtc?: number;
   /** Pattern setup for audit (breakout levels, TP targets) */

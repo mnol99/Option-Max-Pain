@@ -1,8 +1,15 @@
-import { fetchAddressTxs, sumToAddresses, sumToAddress } from '@/lib/solana-bot/bitcoin-blockstream';
+import type { BlockstreamTxRef } from '@/lib/solana-bot/bitcoin-blockstream';
+import {
+  fetchAddressTxs,
+  fetchTx,
+  sumToAddresses,
+  sumToAddress,
+} from '@/lib/solana-bot/bitcoin-blockstream';
 import {
   getIbitCoinbaseDestinationAddresses,
   getIbitDetectEndMinEt,
   getIbitDetectStartMinEt,
+  getIbitExtraTxids,
   getIbitMainDepositAddress,
   getIbitMainOutMaxBtc,
   getIbitMainOutMinBtc,
@@ -43,11 +50,15 @@ export interface IbitBatchGroup {
 function blockTimePassesFilter(blockTimeSec: number): boolean {
   if (blockTimeSec <= 0) return false;
   if (isIbitStrictFiltersEnabled()) {
-    return isBlockTimeInEtMinuteWindow(
+    const inBatchWindow = isBlockTimeInEtMinuteWindow(
       blockTimeSec,
       getIbitDetectStartMinEt(),
       getIbitDetectEndMinEt()
     );
+    /** Daytime (≥10:00 ET): afternoon cover schedule; still require main-output band elsewhere. */
+    const m = getEtMinutesFromMidnight(new Date(blockTimeSec * 1000));
+    const daytimeAfter10 = m >= 10 * 60;
+    return inBatchWindow || daytimeAfter10;
   }
   const d = new Date(blockTimeSec * 1000);
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -132,6 +143,50 @@ export async function pollIbitTransfers(): Promise<{
   const signals: IbitTransferSignal[] = [];
   const seen = new Set<string>();
 
+  const processTx = (tx: BlockstreamTxRef, sourceAddress: string): void => {
+    if (seen.has(tx.txid)) return;
+    const { sats, destinations } = sumToAddresses(tx, destSet);
+    if (sats < minSats) return;
+
+    const mainOutSats = sumToAddress(tx, mainDeposit);
+    const mainOutBtc = mainOutSats / 1e8;
+
+    const blockTime = tx.status?.block_time ?? 0;
+    const mode: 'strict' | 'legacy' = strict ? 'strict' : 'legacy';
+
+    if (strict) {
+      if (blockTime <= 0 || !blockTimePassesFilter(blockTime)) return;
+      if (!mainOutputPassesStrictBand(mainOutSats)) return;
+    } else {
+      if (blockTime > 0 && !blockTimePassesFilter(blockTime)) return;
+    }
+
+    seen.add(tx.txid);
+    const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
+    const coverScheduleUtc = getCoverScheduleUtc(anchor).map((d) => d.toISOString());
+
+    signals.push({
+      txid: tx.txid,
+      blockTime,
+      sourceAddress,
+      sats,
+      mainOutSats,
+      mainOutBtc,
+      matchedDestinations: Array.from(new Set(destinations)),
+      coverScheduleUtc,
+      detectionMode: mode,
+    });
+  };
+
+  for (const extraTxid of getIbitExtraTxids()) {
+    try {
+      const tx = await fetchTx(extraTxid);
+      if (tx) processTx(tx, 'extra-txid');
+    } catch {
+      /* ignore */
+    }
+  }
+
   for (const addr of watchAddresses) {
     let txs;
     try {
@@ -159,38 +214,7 @@ export async function pollIbitTransfers(): Promise<{
     }
 
     for (const tx of txs) {
-      if (seen.has(tx.txid)) continue;
-      const { sats, destinations } = sumToAddresses(tx, destSet);
-      if (sats < minSats) continue;
-
-      const mainOutSats = sumToAddress(tx, mainDeposit);
-      const mainOutBtc = mainOutSats / 1e8;
-
-      const blockTime = tx.status?.block_time ?? 0;
-      const mode: 'strict' | 'legacy' = strict ? 'strict' : 'legacy';
-
-      if (strict) {
-        if (blockTime <= 0 || !blockTimePassesFilter(blockTime)) continue;
-        if (!mainOutputPassesStrictBand(mainOutSats)) continue;
-      } else {
-        if (blockTime > 0 && !blockTimePassesFilter(blockTime)) continue;
-      }
-
-      seen.add(tx.txid);
-      const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
-      const coverScheduleUtc = getCoverScheduleUtc(anchor).map((d) => d.toISOString());
-
-      signals.push({
-        txid: tx.txid,
-        blockTime,
-        sourceAddress: addr,
-        sats,
-        mainOutSats,
-        mainOutBtc,
-        matchedDestinations: Array.from(new Set(destinations)),
-        coverScheduleUtc,
-        detectionMode: mode,
-      });
+      processTx(tx, addr);
     }
   }
 

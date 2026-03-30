@@ -8,6 +8,7 @@ The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET 
    - All price and candle data comes from the Doves oracle on-chain (same feed Jupiter Perps uses for execution)
    - Uses Solana RPC (default public or set `NEXT_PUBLIC_SOLANA_RPC` / `SOLANA_RPC` in `.env.local`). **Public RPCs often return 429** if too many reads hit the same oracle account—use a **free tier from Helius, QuickNode, etc.** Doves reads are throttled in code (~5s min between fetches) with a short stale cache on 429.
    - Optional: `DOVES_MIN_FETCH_INTERVAL_MS` (default 5000), `DOVES_STALE_CACHE_MS` (default 120000).
+   - **IBIT / BLK:** `IBIT_EXTRA_TXIDS` — comma-separated Bitcoin txids to always evaluate (e.g. Arkham transfers not yet in watch-address history). Daytime transfers **≥10:00 ET** use **6 covers 3:00–3:50pm ET** (paper sim); earlier signals use **18 covers 10:00–12:50 ET**.
    - Candles: 60m UTC-hour bars; Daily = ET day bars (see above). First pattern needs 4 completed bars (Daily can take several days of uptime).
 
 2. **Run the app**
