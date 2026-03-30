@@ -38,6 +38,7 @@ import {
   type BlkPaperState,
 } from '@/lib/solana-bot/blk-paper';
 import type { InsideBarServerSnapshot } from '@/lib/solana-bot/inside-bar-server-state';
+import { parseApiJson } from '@/lib/solana-bot/parse-api-json';
 
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
@@ -290,7 +291,9 @@ export default function TradePage() {
           solPrice: side === 'long' ? solPrice : undefined,
         }),
         });
-        const json = await res.json();
+        const json = await parseApiJson<{ success?: boolean; error?: string; data?: { serializedTx?: string } }>(
+          res
+        );
         if (!json.success) {
           setExecError(json.error || 'Execution failed');
           return;
@@ -321,7 +324,9 @@ export default function TradePage() {
   const fetchBtcPrice = useCallback(async () => {
     try {
       const res = await fetch('/api/solana-bot/price?asset=btc');
-      const json = await res.json();
+      const json = await parseApiJson<{ success?: boolean; data?: { price?: number; timestamp?: number } }>(
+        res
+      );
       if (json.success && json.data?.price != null) {
         setBtcPrice(json.data.price);
         setBtcTime(json.data.timestamp ?? Math.floor(Date.now() / 1000));
@@ -344,7 +349,10 @@ export default function TradePage() {
     const run = async () => {
       try {
         const res = await fetch('/api/solana-bot/ibit/poll');
-        const json = await res.json();
+        const json = await parseApiJson<{
+          success?: boolean;
+          data?: { signals?: Array<{ txid: string; blockTime: number; mainOutBtc: number }> };
+        }>(res);
         if (!json.success || !json.data?.signals || cancelled) return;
         const signals = json.data.signals as Array<{
           txid: string;
@@ -396,7 +404,11 @@ export default function TradePage() {
   const fetchPrice = useCallback(async () => {
     try {
       const res = await fetch('/api/solana-bot/price');
-      const json = await res.json();
+      const json = await parseApiJson<{
+        success?: boolean;
+        data?: { price?: number; timestamp?: number };
+        error?: string;
+      }>(res);
       if (json.success && json.data?.price != null) {
         setPrice(json.data.price);
         setPriceTime(json.data.timestamp ?? Math.floor(Date.now() / 1000));
@@ -414,7 +426,11 @@ export default function TradePage() {
       const results = await Promise.all(
         INSIDE_BAR_STRATEGIES.map(async (s) => {
           const res = await fetch(`/api/solana-bot/ohlcv?interval=${s.intervalSec}`);
-          const json = await res.json();
+          const json = await parseApiJson<{
+            success?: boolean;
+            data?: OHLCVCandle[];
+            warmupMinutes?: number;
+          }>(res);
           return { id: s.id, json };
         })
       );
@@ -564,7 +580,16 @@ export default function TradePage() {
             useChartPrice,
           }),
         });
-        const json = await res.json();
+        const json = await parseApiJson<{
+          success?: boolean;
+          data?: {
+            snapshot: InsideBarServerSnapshot & { lastTickAt: number };
+            price: number;
+            priceTime: number;
+            candlesByStrategy: Record<string, OHLCVCandle[]>;
+            warmupByStrategy: Record<string, number>;
+          };
+        }>(res);
         if (!json.success || !json.data || cancelled) return;
         const d = json.data as {
           snapshot: InsideBarServerSnapshot & { lastTickAt: number };
