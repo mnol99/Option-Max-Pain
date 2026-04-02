@@ -37,6 +37,7 @@ interface PollPayload {
     mainOutMinBtc: number;
     mainOutMaxBtc: number | null;
     coinbaseTxLimit?: number;
+    signalMaxAgeSec?: number;
   };
   signals: Array<{
     txid: string;

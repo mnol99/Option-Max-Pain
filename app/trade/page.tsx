@@ -55,6 +55,9 @@ const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
+/** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
+const BLK_PROCESSED_TXIDS_KEY = 'solana-bot-blk-processed-txids-v1';
+const MAX_BLK_TXID_CACHE = 500;
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
@@ -165,6 +168,13 @@ export default function TradePage() {
     blkPaperStateRef.current = fresh;
     setBlkPaperState(fresh);
     blkProcessedSignalsRef.current = new Set();
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(BLK_PROCESSED_TXIDS_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
     setTradesByStrategy((p) => ({ ...p, [BLK_STRATEGY_ID]: [] }));
     setAuditExpanded(new Set());
   }, []);
@@ -205,6 +215,16 @@ export default function TradePage() {
   }, [tradesByStrategy]);
 
   const [sessionHydrated, setSessionHydrated] = useState(false);
+
+  const persistBlkProcessedTxids = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const arr = Array.from(blkProcessedSignalsRef.current).slice(-MAX_BLK_TXID_CACHE);
+      localStorage.setItem(BLK_PROCESSED_TXIDS_KEY, JSON.stringify(arr));
+    } catch {
+      /* quota / private mode */
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -299,11 +319,31 @@ export default function TradePage() {
       if (p.blkProcessedSignals?.length) {
         blkProcessedSignalsRef.current = new Set(p.blkProcessedSignals);
       }
+      try {
+        const blkRaw = localStorage.getItem(BLK_PROCESSED_TXIDS_KEY);
+        if (blkRaw) {
+          const parsed = JSON.parse(blkRaw) as string[];
+          if (Array.isArray(parsed)) {
+            const merged = new Set([
+              ...Array.from(blkProcessedSignalsRef.current),
+              ...parsed,
+            ]);
+            blkProcessedSignalsRef.current = merged;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
     } catch {
       /* ignore corrupt storage */
     }
     setSessionHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!sessionHydrated) return;
+    persistBlkProcessedTxids();
+  }, [sessionHydrated, persistBlkProcessedTxids]);
 
   useEffect(() => {
     if (!sessionHydrated || typeof window === 'undefined') return;
@@ -490,7 +530,7 @@ export default function TradePage() {
                 : prev.collateralUsd / price;
             const inputs = sig.inputSourceAddresses ?? [];
             const primary = sig.sourceAddress ?? inputs[0] ?? null;
-            return createBlkShortOpenState(
+            const next = createBlkShortOpenState(
               price,
               t,
               sig.txid,
@@ -508,6 +548,8 @@ export default function TradePage() {
                 arkhamEntityBase: sig.arkhamEntityBase,
               }
             );
+            queueMicrotask(() => persistBlkProcessedTxids());
+            return next;
           }
           return prev;
         });
@@ -521,7 +563,7 @@ export default function TradePage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [liveMode, btcPrice, paperPositionSizeUsd, leverage]);
+  }, [liveMode, btcPrice, paperPositionSizeUsd, leverage, persistBlkProcessedTxids]);
 
   /** BLK paper: one process step per effect; loop catches up multiple covers after idle. */
   useEffect(() => {

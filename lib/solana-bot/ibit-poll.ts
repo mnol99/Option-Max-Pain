@@ -25,6 +25,7 @@ import {
   getIbitWatchSourceAddresses,
   isArkhamIbitPollEnabled,
   isIbitAllowHistoricalBlockDay,
+  getIbitSignalMaxAgeSec,
   isIbitPollSourceWatchAddresses,
   isIbitStrictFiltersEnabled,
 } from '@/lib/solana-bot/ibit-config';
@@ -81,8 +82,18 @@ function blockTimeIsOnCurrentEtCalendarDay(blockTimeSec: number): boolean {
   return txDayStart === todayStart;
 }
 
+/** Transfer must be recent (chain time), not just "today" — avoids replay after refresh on stale txs. */
+function blockTimeWithinMaxSignalAge(blockTimeSec: number): boolean {
+  if (isIbitAllowHistoricalBlockDay()) return true;
+  const maxAge = getIbitSignalMaxAgeSec();
+  if (maxAge <= 0) return true;
+  const now = Math.floor(Date.now() / 1000);
+  return blockTimeSec >= now - maxAge;
+}
+
 function blockTimePassesFilter(blockTimeSec: number): boolean {
   if (blockTimeSec <= 0) return false;
+  if (!blockTimeWithinMaxSignalAge(blockTimeSec)) return false;
   const sameEtDayOk =
     isIbitAllowHistoricalBlockDay() || blockTimeIsOnCurrentEtCalendarDay(blockTimeSec);
   if (isIbitStrictFiltersEnabled()) {
@@ -153,6 +164,8 @@ export async function pollIbitTransfers(): Promise<{
     /** null = no upper cap */
     mainOutMaxBtc: number | null;
     coinbaseTxLimit: number;
+    /** Block time must be within this many seconds of now (0 = disabled). */
+    signalMaxAgeSec: number;
   };
   signals: IbitTransferSignal[];
   /** Same block_time → batch (multiple sends at once) */
@@ -190,6 +203,7 @@ export async function pollIbitTransfers(): Promise<{
         mainOutMinBtc: getIbitMainOutMinBtc(),
         mainOutMaxBtc: getIbitMainOutMaxBtc(),
         coinbaseTxLimit,
+        signalMaxAgeSec: getIbitSignalMaxAgeSec(),
       },
       signals: [],
       batchGroups: [],
@@ -326,6 +340,7 @@ export async function pollIbitTransfers(): Promise<{
           mainOutMinBtc: getIbitMainOutMinBtc(),
           mainOutMaxBtc: getIbitMainOutMaxBtc(),
           coinbaseTxLimit,
+          signalMaxAgeSec: getIbitSignalMaxAgeSec(),
         },
         signals: [],
         batchGroups: [],
@@ -361,6 +376,7 @@ export async function pollIbitTransfers(): Promise<{
             mainOutMinBtc: getIbitMainOutMinBtc(),
             mainOutMaxBtc: getIbitMainOutMaxBtc(),
             coinbaseTxLimit,
+            signalMaxAgeSec: getIbitSignalMaxAgeSec(),
           },
           signals: [],
           batchGroups: [],
@@ -403,6 +419,7 @@ export async function pollIbitTransfers(): Promise<{
       mainOutMinBtc: getIbitMainOutMinBtc(),
       mainOutMaxBtc: getIbitMainOutMaxBtc(),
       coinbaseTxLimit,
+      signalMaxAgeSec: getIbitSignalMaxAgeSec(),
     },
     signals,
     batchGroups,

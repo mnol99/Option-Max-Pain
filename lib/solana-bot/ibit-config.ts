@@ -184,3 +184,14 @@ export function getArkhamTransferLimit(): number {
 export function isArkhamIbitPollEnabled(): boolean {
   return process.env.ARKHAM_DISABLE_IBIT_POLL !== '1';
 }
+
+/**
+ * Max age (seconds) of **block time** for a signal to count as "fresh".
+ * Prevents re-opening BLK on an hours-old tx after refresh (empty processed-tx set).
+ * Default 2h. Set `0` to disable (not recommended). Ignored when `IBIT_ALLOW_HISTORICAL_SIGNALS=1`.
+ */
+export function getIbitSignalMaxAgeSec(): number {
+  const n = Number(process.env.IBIT_SIGNAL_MAX_AGE_SEC);
+  if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  return 7200;
+}
