@@ -244,8 +244,14 @@ export default function TradePage() {
       if (p.leverage != null) setLeverage(p.leverage);
       if (p.useChartPrice != null) setUseChartPrice(p.useChartPrice);
       if (p.liveMode != null) setLiveMode(p.liveMode);
-      if (p.blkPaperState) {
-        const bs = p.blkPaperState as BlkPaperState & { lastSessionEtDayKey?: string | null };
+        if (p.blkPaperState) {
+        const bs = p.blkPaperState as BlkPaperState & {
+          lastSessionEtDayKey?: string | null;
+          ibitInputSourceAddresses?: string[];
+          ibitPrimarySourceAddress?: string | null;
+          ibitWatchListMatch?: boolean;
+          ibitSignalSource?: string | null;
+        };
         if (bs.coverSliceCount == null && bs.coverScheduleUtc?.length) {
           bs.coverSliceCount = bs.coverScheduleUtc.length;
         }
@@ -259,6 +265,10 @@ export default function TradePage() {
         }
         const levHydr = p.leverage ?? 1.5;
         const colHydr = p.paperPositionSizeUsd ?? 1000;
+        if (bs.ibitInputSourceAddresses == null) bs.ibitInputSourceAddresses = [];
+        if (bs.ibitPrimarySourceAddress === undefined) bs.ibitPrimarySourceAddress = null;
+        if (bs.ibitWatchListMatch == null) bs.ibitWatchListMatch = false;
+        if (bs.ibitSignalSource === undefined) bs.ibitSignalSource = null;
         if (bs.collateralUsd == null || bs.leverage == null) {
           if (bs.status === 'short_open') {
             // Legacy: notionalUsd was full USD short size at 1× (no separate collateral/leverage)
@@ -424,13 +434,27 @@ export default function TradePage() {
         const res = await fetch('/api/solana-bot/ibit/poll');
         const json = await parseApiJson<{
           success?: boolean;
-          data?: { signals?: Array<{ txid: string; blockTime: number; mainOutBtc: number }> };
+          data?: {
+            signals?: Array<{
+              txid: string;
+              blockTime: number;
+              mainOutBtc: number;
+              sourceAddress?: string;
+              inputSourceAddresses?: string[];
+              watchListMatch?: boolean;
+              signalSource?: string;
+            }>;
+          };
         }>(res);
         if (!json.success || !json.data?.signals || cancelled) return;
         const signals = json.data.signals as Array<{
           txid: string;
           blockTime: number;
           mainOutBtc: number;
+          sourceAddress?: string;
+          inputSourceAddresses?: string[];
+          watchListMatch?: boolean;
+          signalSource?: string;
         }>;
         const price = btcPrice;
         setBlkPaperState((prev) => {
@@ -446,13 +470,21 @@ export default function TradePage() {
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc
                 : prev.collateralUsd / price;
+            const inputs = sig.inputSourceAddresses ?? [];
+            const primary = sig.sourceAddress ?? inputs[0] ?? null;
             return createBlkShortOpenState(
               price,
               t,
               sig.txid,
               prev.collateralUsd,
               prev.leverage,
-              chainBtc
+              chainBtc,
+              {
+                inputSourceAddresses: inputs,
+                primarySourceAddress: primary,
+                watchListMatch: sig.watchListMatch ?? false,
+                signalSource: sig.signalSource ?? 'coinbase_deposit',
+              }
             );
           }
           return prev;
@@ -1148,6 +1180,27 @@ export default function TradePage() {
                           )
                         </span>
                       </div>
+                      {blkPaperState.ibitSignalSource && (
+                        <p className="text-xs text-gray-500">
+                          Detection:{' '}
+                          <span className="font-mono">
+                            {blkPaperState.ibitSignalSource === 'coinbase_deposit'
+                              ? 'Coinbase deposit (large in) → sender from inputs'
+                              : blkPaperState.ibitSignalSource}
+                          </span>
+                          {blkPaperState.ibitWatchListMatch ? ' · watch-list match' : ''}
+                        </p>
+                      )}
+                      {blkPaperState.ibitPrimarySourceAddress && (
+                        <p className="text-xs text-gray-500 break-all">
+                          Primary input (feeder): {blkPaperState.ibitPrimarySourceAddress}
+                        </p>
+                      )}
+                      {blkPaperState.ibitInputSourceAddresses.length > 0 && (
+                        <p className="text-xs text-gray-500 break-all">
+                          All input addresses: {blkPaperState.ibitInputSourceAddresses.join(', ')}
+                        </p>
+                      )}
                       {blkPaperState.signalTxid && (
                         <p className="text-xs text-gray-500 break-all">
                           Signal tx: {blkPaperState.signalTxid}
@@ -1419,6 +1472,17 @@ export default function TradePage() {
                                 Signal on-chain to Coinbase (main output):{' '}
                                 <span className="font-mono">{t.chainMainOutBtc.toFixed(4)} BTC</span> — paper
                                 size uses your position $ above.
+                              </p>
+                            )}
+                            {t.ibitPrimarySourceAddress && (
+                              <p className="text-xs text-gray-500 break-all">
+                                Sender (largest input): {t.ibitPrimarySourceAddress}
+                                {t.ibitWatchListMatch ? ' · matched legacy watch list' : ''}
+                              </p>
+                            )}
+                            {t.ibitInputSourceAddresses && t.ibitInputSourceAddresses.length > 0 && (
+                              <p className="text-xs text-gray-500 break-all">
+                                Input addresses: {t.ibitInputSourceAddresses.join(', ')}
                               </p>
                             )}
                             <p className="text-xs text-gray-500">

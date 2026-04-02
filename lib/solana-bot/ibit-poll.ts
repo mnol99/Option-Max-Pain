@@ -1,11 +1,14 @@
 import type { BlockstreamTxRef } from '@/lib/solana-bot/bitcoin-blockstream';
 import {
+  collectInputSourceAddresses,
   fetchAddressTxs,
   fetchTx,
+  primaryInputSourceAddress,
   sumToAddresses,
   sumToAddress,
 } from '@/lib/solana-bot/bitcoin-blockstream';
 import {
+  getIbitCoinbaseAddressTxLimit,
   getIbitCoinbaseDestinationAddresses,
   getIbitDetectEndMinEt,
   getIbitDetectStartMinEt,
@@ -16,6 +19,7 @@ import {
   getIbitMinSats,
   getIbitWatchSourceAddresses,
   isIbitAllowHistoricalBlockDay,
+  isIbitPollSourceWatchAddresses,
   isIbitStrictFiltersEnabled,
 } from '@/lib/solana-bot/ibit-config';
 import {
@@ -31,7 +35,17 @@ export interface IbitTransferSignal {
   txid: string;
   /** Unix seconds (block time, or 0 if unknown) */
   blockTime: number;
+  /**
+   * Primary sender heuristic: address of the largest-value input prevout (feeder UTXO).
+   * Use `inputSourceAddresses` for the full set.
+   */
   sourceAddress: string;
+  /** Distinct addresses that spent into this tx (prevouts) — pattern analysis / audit */
+  inputSourceAddresses: string[];
+  /** Any input address appears in the optional legacy custodian watch list */
+  watchListMatch: boolean;
+  /** coinbase_deposit = seen from monitoring Coinbase recv first; source_watch = legacy poll; extra_txid = IBIT_EXTRA_TXIDS */
+  signalSource: 'coinbase_deposit' | 'source_watch' | 'extra_txid';
   /** Total sats to any watched Coinbase destination */
   sats: number;
   /** Sats to main Prime deposit address (large leg) */
@@ -113,6 +127,8 @@ export async function pollIbitTransfers(): Promise<{
   inLegacySignalWindow: boolean;
   /** Current time in active detection window (strict or legacy per config) */
   inDetectWindow: boolean;
+  /** True when also polling legacy source watch addresses (env IBIT_POLL_SOURCE_WATCH=1) */
+  pollSourceWatchAddresses: boolean;
   detection: {
     strictFilters: boolean;
     mainDepositAddress: string;
@@ -121,6 +137,7 @@ export async function pollIbitTransfers(): Promise<{
     mainOutMinBtc: number;
     /** null = no upper cap */
     mainOutMaxBtc: number | null;
+    coinbaseTxLimit: number;
   };
   signals: IbitTransferSignal[];
   /** Same block_time → batch (multiple sends at once) */
@@ -128,19 +145,23 @@ export async function pollIbitTransfers(): Promise<{
   error?: string;
 }> {
   const watchAddresses = getIbitWatchSourceAddresses();
+  const watchSet = new Set(watchAddresses);
   const coinbaseAddresses = getIbitCoinbaseDestinationAddresses();
   const minSats = getIbitMinSats();
   const destSet = new Set(coinbaseAddresses);
   const mainDeposit = getIbitMainDepositAddress();
   const strict = isIbitStrictFiltersEnabled();
+  const pollWatch = isIbitPollSourceWatchAddresses();
+  const coinbaseTxLimit = getIbitCoinbaseAddressTxLimit();
 
-  if (watchAddresses.length === 0 || coinbaseAddresses.length === 0) {
+  if (coinbaseAddresses.length === 0) {
     return {
       configured: false,
       watchAddresses,
       coinbaseAddresses,
       inLegacySignalWindow: isWithinSignalWindowEt(),
       inDetectWindow: nowInActiveDetectWindow(),
+      pollSourceWatchAddresses: pollWatch,
       detection: {
         strictFilters: strict,
         mainDepositAddress: mainDeposit,
@@ -148,6 +169,7 @@ export async function pollIbitTransfers(): Promise<{
         detectEndMinEt: getIbitDetectEndMinEt(),
         mainOutMinBtc: getIbitMainOutMinBtc(),
         mainOutMaxBtc: getIbitMainOutMaxBtc(),
+        coinbaseTxLimit,
       },
       signals: [],
       batchGroups: [],
@@ -157,10 +179,13 @@ export async function pollIbitTransfers(): Promise<{
   const signals: IbitTransferSignal[] = [];
   const seen = new Set<string>();
 
-  const processTx = (tx: BlockstreamTxRef, sourceAddress: string): void => {
-    if (seen.has(tx.txid)) return;
+  const buildSignal = (
+    tx: BlockstreamTxRef,
+    signalSource: IbitTransferSignal['signalSource']
+  ): IbitTransferSignal | null => {
+    if (seen.has(tx.txid)) return null;
     const { sats, destinations } = sumToAddresses(tx, destSet);
-    if (sats < minSats) return;
+    if (sats < minSats) return null;
 
     const mainOutSats = sumToAddress(tx, mainDeposit);
     const mainOutBtc = mainOutSats / 1e8;
@@ -169,42 +194,61 @@ export async function pollIbitTransfers(): Promise<{
     const mode: 'strict' | 'legacy' = strict ? 'strict' : 'legacy';
 
     if (strict) {
-      if (blockTime <= 0 || !blockTimePassesFilter(blockTime)) return;
-      if (!mainOutputPassesStrictBand(mainOutSats)) return;
+      if (blockTime <= 0 || !blockTimePassesFilter(blockTime)) return null;
+      if (!mainOutputPassesStrictBand(mainOutSats)) return null;
     } else {
-      if (blockTime > 0 && !blockTimePassesFilter(blockTime)) return;
+      if (blockTime > 0 && !blockTimePassesFilter(blockTime)) return null;
     }
 
     seen.add(tx.txid);
     const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
     const coverScheduleUtc = getCoverScheduleUtc(anchor).map((d) => d.toISOString());
 
-    signals.push({
+    const inputSourceAddresses = collectInputSourceAddresses(tx);
+    const primary = primaryInputSourceAddress(tx);
+    const watchListMatch = inputSourceAddresses.some((a) => watchSet.has(a));
+    const sourceAddress =
+      primary ?? inputSourceAddresses[0] ?? (signalSource === 'extra_txid' ? 'extra-txid' : 'unknown');
+
+    return {
       txid: tx.txid,
       blockTime,
       sourceAddress,
+      inputSourceAddresses,
+      watchListMatch,
+      signalSource,
       sats,
       mainOutSats,
       mainOutBtc,
       matchedDestinations: Array.from(new Set(destinations)),
       coverScheduleUtc,
       detectionMode: mode,
-    });
+    };
   };
 
+  const processTx = (
+    tx: BlockstreamTxRef,
+    signalSource: IbitTransferSignal['signalSource']
+  ): void => {
+    const sig = buildSignal(tx, signalSource);
+    if (sig) signals.push(sig);
+  };
+
+  /** 1) Manual / Arkham txids */
   for (const extraTxid of getIbitExtraTxids()) {
     try {
       const tx = await fetchTx(extraTxid);
-      if (tx) processTx(tx, 'extra-txid');
+      if (tx) processTx(tx, 'extra_txid');
     } catch {
       /* ignore */
     }
   }
 
-  for (const addr of watchAddresses) {
-    let txs;
+  /** 2) Coinbase deposit addresses first — large BTC in to main deposit → signal (sender = inputs) */
+  for (const addr of coinbaseAddresses) {
+    let txs: BlockstreamTxRef[];
     try {
-      txs = await fetchAddressTxs(addr, 30);
+      txs = await fetchAddressTxs(addr, coinbaseTxLimit);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return {
@@ -213,6 +257,7 @@ export async function pollIbitTransfers(): Promise<{
         coinbaseAddresses,
         inLegacySignalWindow: isWithinSignalWindowEt(),
         inDetectWindow: nowInActiveDetectWindow(),
+        pollSourceWatchAddresses: pollWatch,
         detection: {
           strictFilters: strict,
           mainDepositAddress: mainDeposit,
@@ -220,6 +265,7 @@ export async function pollIbitTransfers(): Promise<{
           detectEndMinEt: getIbitDetectEndMinEt(),
           mainOutMinBtc: getIbitMainOutMinBtc(),
           mainOutMaxBtc: getIbitMainOutMaxBtc(),
+          coinbaseTxLimit,
         },
         signals: [],
         batchGroups: [],
@@ -228,7 +274,43 @@ export async function pollIbitTransfers(): Promise<{
     }
 
     for (const tx of txs) {
-      processTx(tx, addr);
+      processTx(tx, 'coinbase_deposit');
+    }
+  }
+
+  /** 3) Optional: legacy path — txs spending from known custodian addresses */
+  if (pollWatch) {
+    for (const addr of watchAddresses) {
+      let txs: BlockstreamTxRef[];
+      try {
+        txs = await fetchAddressTxs(addr, 30);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          configured: true,
+          watchAddresses,
+          coinbaseAddresses,
+          inLegacySignalWindow: isWithinSignalWindowEt(),
+          inDetectWindow: nowInActiveDetectWindow(),
+          pollSourceWatchAddresses: pollWatch,
+          detection: {
+            strictFilters: strict,
+            mainDepositAddress: mainDeposit,
+            detectStartMinEt: getIbitDetectStartMinEt(),
+            detectEndMinEt: getIbitDetectEndMinEt(),
+            mainOutMinBtc: getIbitMainOutMinBtc(),
+            mainOutMaxBtc: getIbitMainOutMaxBtc(),
+            coinbaseTxLimit,
+          },
+          signals: [],
+          batchGroups: [],
+          error: msg,
+        };
+      }
+
+      for (const tx of txs) {
+        processTx(tx, 'source_watch');
+      }
     }
   }
 
@@ -251,6 +333,7 @@ export async function pollIbitTransfers(): Promise<{
     coinbaseAddresses,
     inLegacySignalWindow: isWithinSignalWindowEt(),
     inDetectWindow: nowInActiveDetectWindow(),
+    pollSourceWatchAddresses: pollWatch,
     detection: {
       strictFilters: strict,
       mainDepositAddress: mainDeposit,
@@ -258,6 +341,7 @@ export async function pollIbitTransfers(): Promise<{
       detectEndMinEt: getIbitDetectEndMinEt(),
       mainOutMinBtc: getIbitMainOutMinBtc(),
       mainOutMaxBtc: getIbitMainOutMaxBtc(),
+      coinbaseTxLimit,
     },
     signals,
     batchGroups,

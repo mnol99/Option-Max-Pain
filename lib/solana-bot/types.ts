@@ -93,6 +93,14 @@ export interface ClosedTrade {
   blkCoverSliceTotal?: number;
   /** BTC observed on-chain to Coinbase (main output); session short size */
   chainMainOutBtc?: number;
+  /** IBIT: distinct input (sender) prevout addresses — pattern / audit */
+  ibitInputSourceAddresses?: string[];
+  /** IBIT: largest-value input address heuristic */
+  ibitPrimarySourceAddress?: string;
+  /** IBIT: any input matched legacy custodian watch list */
+  ibitWatchListMatch?: boolean;
+  /** IBIT: coinbase_deposit | source_watch | extra_txid */
+  ibitSignalSource?: string;
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,

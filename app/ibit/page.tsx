@@ -22,6 +22,7 @@ interface PollPayload {
   coinbaseAddresses: string[];
   inLegacySignalWindow: boolean;
   inDetectWindow: boolean;
+  pollSourceWatchAddresses?: boolean;
   detection: {
     strictFilters: boolean;
     mainDepositAddress: string;
@@ -29,11 +30,15 @@ interface PollPayload {
     detectEndMinEt: number;
     mainOutMinBtc: number;
     mainOutMaxBtc: number | null;
+    coinbaseTxLimit?: number;
   };
   signals: Array<{
     txid: string;
     blockTime: number;
     sourceAddress: string;
+    inputSourceAddresses?: string[];
+    watchListMatch?: boolean;
+    signalSource?: 'coinbase_deposit' | 'source_watch' | 'extra_txid';
     sats: number;
     mainOutSats?: number;
     mainOutBtc?: number;
@@ -465,6 +470,12 @@ export default function IbitPage() {
 
         <section className="bg-white rounded-lg shadow p-6 space-y-4">
           <h2 className="text-lg font-semibold">Recent signals</h2>
+          <p className="text-xs text-gray-600">
+            Primary path: monitor <strong>Coinbase deposit</strong> addresses for large (~200+ BTC) transfers
+            to the main output; sender addresses come from tx inputs. Optional{' '}
+            <code className="bg-gray-100 px-1">IBIT_POLL_SOURCE_WATCH=1</code> also polls legacy custodian
+            source addresses.
+          </p>
           {poll?.batchGroups && poll.batchGroups.length > 0 && (
             <div className="text-sm">
               <p className="font-medium text-gray-800 mb-1">Same-block batches</p>
@@ -489,7 +500,14 @@ export default function IbitPage() {
                     main {s.mainOutBtc != null ? `${s.mainOutBtc.toFixed(4)} BTC` : '—'} · total{' '}
                     {s.sats} sats → {s.matchedDestinations.join(', ')}
                     {s.detectionMode && ` · ${s.detectionMode}`}
+                    {s.signalSource && ` · ${s.signalSource}`}
+                    {s.watchListMatch ? ' · watch-list match' : ''}
                   </div>
+                  {(s.inputSourceAddresses?.length ?? 0) > 0 && (
+                    <div className="text-gray-500 text-xs mt-1 break-all">
+                      inputs: {s.inputSourceAddresses!.join(', ')}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -500,11 +518,18 @@ export default function IbitPage() {
           <p className="font-semibold mb-2">Environment</p>
           <ul className="list-disc pl-5 space-y-1 text-xs">
             <li>
-              <code>IBIT_BTC_WATCH_ADDRESSES</code> — comma-separated Bitcoin source addresses
+              <code>IBIT_BTC_WATCH_ADDRESSES</code> — optional legacy custodian sources (used for overlap
+              audit; not required for signals when polling Coinbase first)
             </li>
             <li>
               <code>IBIT_BTC_COINBASE_ADDRESSES</code> — comma-separated destination addresses (e.g.
-              Coinbase deposit)
+              Coinbase deposit) — polled first for large incoming transfers
+            </li>
+            <li>
+              <code>IBIT_COINBASE_TX_LIMIT</code> — recent txs per Coinbase address (default 50, max 100)
+            </li>
+            <li>
+              <code>IBIT_POLL_SOURCE_WATCH=1</code> — also poll legacy source watch addresses (default off)
             </li>
             <li>
               <code>IBIT_MIN_SATS</code> — optional minimum transfer size (default 100000)

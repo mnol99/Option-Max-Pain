@@ -4,9 +4,19 @@
 
 const DEFAULT_BASE = 'https://blockstream.info/api';
 
+/** Prevout on inputs — present on full tx and on `/address/.../txs` list items from Blockstream. */
+export interface BlockstreamVin {
+  txid?: string;
+  prevout?: {
+    scriptpubkey_address?: string;
+    value?: number;
+  };
+}
+
 export interface BlockstreamTxRef {
   txid: string;
   status: { block_time?: number; confirmed: boolean };
+  vin?: BlockstreamVin[];
   vout: Array<{
     value: number;
     scriptpubkey_address?: string;
@@ -59,4 +69,25 @@ export function sumToAddress(tx: BlockstreamTxRef, address: string): number {
     if (o.scriptpubkey_address === address) sats += Math.round(o.value);
   }
   return sats;
+}
+
+/** Distinct addresses appearing as spend inputs (prevouts). */
+export function collectInputSourceAddresses(tx: BlockstreamTxRef): string[] {
+  const set = new Set<string>();
+  for (const v of tx.vin || []) {
+    const a = v.prevout?.scriptpubkey_address;
+    if (a) set.add(a);
+  }
+  return Array.from(set);
+}
+
+/** Address of the largest-value prevout (typical “feeder” UTXO for large transfers). */
+export function primaryInputSourceAddress(tx: BlockstreamTxRef): string | null {
+  let best: { addr: string; val: number } | null = null;
+  for (const v of tx.vin || []) {
+    const a = v.prevout?.scriptpubkey_address;
+    const val = v.prevout?.value ?? 0;
+    if (a && val > (best?.val ?? -1)) best = { addr: a, val };
+  }
+  return best?.addr ?? null;
 }

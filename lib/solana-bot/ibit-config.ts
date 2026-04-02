@@ -134,3 +134,18 @@ export function getIbitExtraTxids(): string[] {
 export function isIbitAllowHistoricalBlockDay(): boolean {
   return process.env.IBIT_ALLOW_HISTORICAL_SIGNALS === '1';
 }
+
+/**
+ * When `1`, also poll legacy IBIT source (`bc1…`) watch addresses for outgoing txs.
+ * Default off: detection is **Coinbase deposit first** (large transfer in → signal), then sender is recorded for audit.
+ */
+export function isIbitPollSourceWatchAddresses(): boolean {
+  return process.env.IBIT_POLL_SOURCE_WATCH === '1';
+}
+
+/** Recent txs to pull per Coinbase address (Blockstream). Default 50. */
+export function getIbitCoinbaseAddressTxLimit(): number {
+  const n = Number(process.env.IBIT_COINBASE_TX_LIMIT);
+  if (Number.isFinite(n) && n >= 5 && n <= 100) return Math.floor(n);
+  return 50;
+}
