@@ -8,6 +8,8 @@ const PYTH_HERMES = 'https://hermes.pyth.network';
 const SOL_USD_FEED_ID = '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
 /** BTC/USD */
 const BTC_USD_FEED_ID = '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43';
+/** ETH/USD */
+const ETH_USD_FEED_ID = '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace';
 
 interface PythPriceResponse {
   parsed?: Array<{
@@ -22,6 +24,10 @@ export async function fetchPythPrice(): Promise<{ price: number; timestamp: numb
 
 export async function fetchPythBtcPrice(): Promise<{ price: number; timestamp: number }> {
   return fetchPythPriceByFeedId(BTC_USD_FEED_ID, 'BTC');
+}
+
+export async function fetchPythEthPrice(): Promise<{ price: number; timestamp: number }> {
+  return fetchPythPriceByFeedId(ETH_USD_FEED_ID, 'ETH');
 }
 
 async function fetchPythPriceByFeedId(

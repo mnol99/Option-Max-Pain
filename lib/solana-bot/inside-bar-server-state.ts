@@ -4,8 +4,12 @@
  */
 
 import { advanceCandlesOnce, getCandles, getWarmupMinutes } from '@/lib/solana-bot/candle-aggregator';
-import { fetchPythPrice } from '@/lib/solana-bot/pyth-price';
-import { INSIDE_BAR_STRATEGIES } from '@/lib/solana-bot/strategy-tabs';
+import { fetchPythPrice, fetchPythBtcPrice, fetchPythEthPrice } from '@/lib/solana-bot/pyth-price';
+import {
+  INSIDE_BAR_STRATEGIES,
+  strategyUnderlying,
+  type InsideBarUnderlying,
+} from '@/lib/solana-bot/strategy-tabs';
 import { createInitialState } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import {
@@ -93,6 +97,7 @@ export function tickInsideBarServerQueued(
   snapshot: InsideBarServerSnapshot & { lastTickAt: number };
   price: number;
   priceTime: number;
+  pricesByStrategy: Record<string, { price: number; time: number }>;
   candlesByStrategy: Record<string, OHLCVCandle[]>;
   newTrades: Record<string, ClosedTrade[]>;
   warmupByStrategy: Record<string, number>;
@@ -100,6 +105,14 @@ export function tickInsideBarServerQueued(
   const task = tickChain.then(() => tickInsideBarServer(clientSnapshot, positionSizeUsd, options));
   tickChain = task.catch(() => {});
   return task;
+}
+
+async function fetchPerUnderlyingPrice(
+  u: InsideBarUnderlying
+): Promise<{ price: number; timestamp: number }> {
+  if (u === 'sol') return fetchPythPrice();
+  if (u === 'btc') return fetchPythBtcPrice();
+  return fetchPythEthPrice();
 }
 
 export async function tickInsideBarServer(
@@ -110,6 +123,7 @@ export async function tickInsideBarServer(
   snapshot: InsideBarServerSnapshot & { lastTickAt: number };
   price: number;
   priceTime: number;
+  pricesByStrategy: Record<string, { price: number; time: number }>;
   candlesByStrategy: Record<string, OHLCVCandle[]>;
   newTrades: Record<string, ClosedTrade[]>;
   warmupByStrategy: Record<string, number>;
@@ -122,21 +136,48 @@ export async function tickInsideBarServer(
 
   const candlesByStrategy: Record<string, OHLCVCandle[]> = {};
   for (const s of INSIDE_BAR_STRATEGIES) {
-    candlesByStrategy[s.id] = getCandles(s.intervalSec);
+    const u = strategyUnderlying(s);
+    candlesByStrategy[s.id] = getCandles(u, s.intervalSec);
   }
 
-  const pr = await fetchPythPrice();
-  let price = pr.price;
-  let priceTime = pr.timestamp;
-  if (options?.useChartPrice) {
-    const first = INSIDE_BAR_STRATEGIES.map((s) => candlesByStrategy[s.id]?.[0]?.close).find(
-      (c) => typeof c === 'number' && c > 0
-    );
-    if (first != null) {
-      price = first;
-      priceTime = Math.floor(Date.now() / 1000);
+  const underlyingPrices: Partial<
+    Record<InsideBarUnderlying, { price: number; timestamp: number }>
+  > = {};
+  const loadUnderlying = async (u: InsideBarUnderlying) => {
+    if (underlyingPrices[u]) return;
+    try {
+      underlyingPrices[u] = await fetchPerUnderlyingPrice(u);
+    } catch {
+      /* leave missing */
     }
+  };
+
+  const priceByStrategy: Record<string, number> = {};
+  const priceTimeByStrategy: Record<string, number> = {};
+  const pricesByStrategy: Record<string, { price: number; time: number }> = {};
+
+  for (const s of INSIDE_BAR_STRATEGIES) {
+    const u = strategyUnderlying(s);
+    await loadUnderlying(u);
+    const pr = underlyingPrices[u];
+    if (!pr) continue;
+    let p = pr.price;
+    let t = pr.timestamp;
+    if (options?.useChartPrice) {
+      const c0 = candlesByStrategy[s.id]?.[0]?.close;
+      if (typeof c0 === 'number' && c0 > 0) {
+        p = c0;
+        t = Math.floor(Date.now() / 1000);
+      }
+    }
+    priceByStrategy[s.id] = p;
+    priceTimeByStrategy[s.id] = t;
+    pricesByStrategy[s.id] = { price: p, time: t };
   }
+
+  const solStrat = INSIDE_BAR_STRATEGIES.find((x) => strategyUnderlying(x) === 'sol');
+  const displayPrice = solStrat ? priceByStrategy[solStrat.id] ?? 0 : 0;
+  const displayTime = solStrat ? priceTimeByStrategy[solStrat.id] ?? Math.floor(Date.now() / 1000) : Math.floor(Date.now() / 1000);
 
   const refsIn: InsideBarRefs = {
     entering: { ...serverState.entering },
@@ -148,8 +189,8 @@ export async function tickInsideBarServer(
     serverState.stateByStrategy,
     refsIn,
     candlesByStrategy,
-    price,
-    priceTime,
+    priceByStrategy,
+    priceTimeByStrategy,
     positionSizeUsd
   );
 
@@ -167,13 +208,14 @@ export async function tickInsideBarServer(
 
   const warmupByStrategy: Record<string, number> = {};
   for (const s of INSIDE_BAR_STRATEGIES) {
-    warmupByStrategy[s.id] = getWarmupMinutes(s.intervalSec);
+    warmupByStrategy[s.id] = getWarmupMinutes(strategyUnderlying(s), s.intervalSec);
   }
 
   return {
     snapshot: serverState,
-    price,
-    priceTime,
+    price: displayPrice,
+    priceTime: displayTime,
+    pricesByStrategy,
     candlesByStrategy,
     newTrades: result.newTrades,
     warmupByStrategy,

@@ -14,6 +14,7 @@ import {
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import type { StrategyTabDef } from '@/lib/solana-bot/strategy-tabs';
+import { strategyUnderlying } from '@/lib/solana-bot/strategy-tabs';
 import { isWeekendHalt60mEt } from '@/lib/solana-bot/ibit-schedule';
 
 export interface InsideBarRefs {
@@ -23,13 +24,24 @@ export interface InsideBarRefs {
 
 function enrichClosedTrades(
   list: ClosedTrade[],
-  positionSizeUsd: number
+  positionSizeUsd: number,
+  asset: 'sol' | 'btc' | 'eth'
 ): ClosedTrade[] {
-  return list.map((closedTrade) => ({
-    ...closedTrade,
-    pnlUsd: (closedTrade.pnlPercent / 100) * positionSizeUsd,
-    solAmount: positionSizeUsd / closedTrade.entryPrice,
-  }));
+  return list.map((closedTrade) => {
+    const amt = positionSizeUsd / closedTrade.entryPrice;
+    const base = {
+      ...closedTrade,
+      pnlUsd: (closedTrade.pnlPercent / 100) * positionSizeUsd,
+      asset,
+    };
+    if (asset === 'btc') {
+      return { ...base, btcAmount: amt };
+    }
+    if (asset === 'eth') {
+      return { ...base, ethAmount: amt };
+    }
+    return { ...base, solAmount: amt };
+  });
 }
 
 /**
@@ -105,8 +117,8 @@ export function applyInsideBarPriceTick(
   strategies: StrategyTabDef[],
   prevState: Record<string, TradeState>,
   refsIn: InsideBarRefs,
-  price: number,
-  priceTime: number,
+  priceByStrategyId: Record<string, number>,
+  priceTimeByStrategyId: Record<string, number>,
   positionSizeUsd: number
 ): InsideBarPriceTickResult {
   const state = { ...prevState };
@@ -126,13 +138,21 @@ export function applyInsideBarPriceTick(
     let st = state[sid];
     if (!st) continue;
 
+    const price = priceByStrategyId[sid];
+    const priceTime = priceTimeByStrategyId[sid];
+    if (price == null || priceTime == null) continue;
+
     /** 60m only: Fri ≥5pm ET → Sun &lt;3pm ET — no new trades; flatten open legs. Daily (tf1d) always runs. */
-    if (sid === 'tf60m' && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
+    if (s.intervalSec === 3600 && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
       if (st.status === 'in_position') {
         const r = checkPositionExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
         state[sid] = r.newState;
         if (r.closedTrades.length > 0) {
-          newTrades[sid] = enrichClosedTrades(r.closedTrades, positionSizeUsd);
+          newTrades[sid] = enrichClosedTrades(
+            r.closedTrades,
+            positionSizeUsd,
+            strategyUnderlying(s)
+          );
         }
         continue;
       }
@@ -140,7 +160,11 @@ export function applyInsideBarPriceTick(
         const r = checkReversedExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
         state[sid] = r.newState;
         if (r.closedTrades.length > 0) {
-          newTrades[sid] = enrichClosedTrades(r.closedTrades, positionSizeUsd);
+          newTrades[sid] = enrichClosedTrades(
+            r.closedTrades,
+            positionSizeUsd,
+            strategyUnderlying(s)
+          );
         }
         continue;
       }
@@ -199,7 +223,7 @@ export function applyInsideBarPriceTick(
       const { newState, closedTrades } = checkPositionExit(st, price, priceTime);
       state[sid] = newState;
       if (closedTrades.length > 0) {
-        newTrades[sid] = enrichClosedTrades(closedTrades, positionSizeUsd);
+        newTrades[sid] = enrichClosedTrades(closedTrades, positionSizeUsd, strategyUnderlying(s));
       }
       continue;
     }
@@ -208,7 +232,7 @@ export function applyInsideBarPriceTick(
       const { newState, closedTrades } = checkReversedExit(st, price, priceTime);
       state[sid] = newState;
       if (closedTrades.length > 0) {
-        newTrades[sid] = enrichClosedTrades(closedTrades, positionSizeUsd);
+        newTrades[sid] = enrichClosedTrades(closedTrades, positionSizeUsd, strategyUnderlying(s));
       }
     }
   }
@@ -224,8 +248,8 @@ export function runInsideBarStep(
   prevState: Record<string, TradeState>,
   refsIn: InsideBarRefs,
   candlesByStrategy: Record<string, OHLCVCandle[]>,
-  price: number,
-  priceTime: number,
+  priceByStrategyId: Record<string, number>,
+  priceTimeByStrategyId: Record<string, number>,
   positionSizeUsd: number
 ): InsideBarPriceTickResult & { stateAfterPattern: Record<string, TradeState> } {
   const refsPattern: InsideBarRefs = {
@@ -242,8 +266,8 @@ export function runInsideBarStep(
     strategies,
     stateAfterPattern,
     refsPattern,
-    price,
-    priceTime,
+    priceByStrategyId,
+    priceTimeByStrategyId,
     positionSizeUsd
   );
   return { ...afterPrice, stateAfterPattern };

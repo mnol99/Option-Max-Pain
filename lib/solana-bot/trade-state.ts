@@ -52,6 +52,9 @@ function closedTradeNotionalUsd(t: ClosedTrade): number {
   if (t.asset === 'btc' && t.btcAmount != null && t.entryPrice > 0) {
     return t.btcAmount * t.entryPrice;
   }
+  if (t.asset === 'eth' && t.ethAmount != null && t.entryPrice > 0) {
+    return t.ethAmount * t.entryPrice;
+  }
   if (t.solAmount != null && t.entryPrice > 0) {
     return t.solAmount * t.entryPrice;
   }

@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
         snapshot: result.snapshot,
         price: result.price,
         priceTime: result.priceTime,
+        pricesByStrategy: result.pricesByStrategy,
         candlesByStrategy: result.candlesByStrategy,
         newTrades: result.newTrades,
         warmupByStrategy: result.warmupByStrategy,

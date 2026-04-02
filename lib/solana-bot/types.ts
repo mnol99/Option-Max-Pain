@@ -80,9 +80,11 @@ export interface ClosedTrade {
   pnlUsd?: number;
   /** SOL notional size (positionSizeUsd / entryPrice) */
   solAmount?: number;
+  /** ETH notional (WETH perp) */
+  ethAmount?: number;
   /** BLK / BTC paper: BTC notional */
   btcAmount?: number;
-  asset?: 'sol' | 'btc';
+  asset?: 'sol' | 'btc' | 'eth';
   /** BLK: Bitcoin chain txid that triggered the paper short */
   ibitSignalTxid?: string;
   /** BLK: group id for one IBIT session (open + 18 covers) */

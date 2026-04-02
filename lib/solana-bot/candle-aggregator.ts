@@ -1,9 +1,10 @@
 /**
- * Build OHLCV candles from Doves oracle (Jupiter Perps) for multiple bar sizes.
- * Polls once per tick and updates 60m + Daily (ET) aggregations in parallel.
+ * Build OHLCV candles from Jupiter Perps (SOL/Doves) + Pyth (BTC, ETH) for multiple bar sizes.
+ * Polls once per tick and updates 60m + Daily (ET) per underlying in parallel.
  */
 
 import { fetchDovesPrice } from './doves-oracle';
+import { fetchPythBtcPrice, fetchPythEthPrice } from './pyth-price';
 import type { OHLCVCandle } from './types';
 import {
   STRATEGY_INTERVALS,
@@ -12,6 +13,9 @@ import {
   DAILY_BAR_SEC,
 } from './candle-intervals';
 import { getNextEtDaily8pmBarStartUnix } from './ibit-schedule';
+import type { InsideBarUnderlying } from './strategy-tabs';
+
+export const INSIDE_BAR_UNDERLYINGS: InsideBarUnderlying[] = ['sol', 'btc', 'eth'];
 
 interface CurrentCandle {
   unixTime: number;
@@ -23,13 +27,20 @@ interface CurrentCandle {
 
 const MAX_COMPLETED = 10;
 
-const completedByInterval = new Map<StrategyIntervalSec, OHLCVCandle[]>();
-const currentByInterval = new Map<StrategyIntervalSec, CurrentCandle | null>();
+function key(u: InsideBarUnderlying, intervalSec: StrategyIntervalSec): string {
+  return `${u}:${intervalSec}`;
+}
+
+const completedByKey = new Map<string, OHLCVCandle[]>();
+const currentByKey = new Map<string, CurrentCandle | null>();
 
 function ensureMaps(): void {
-  for (const sec of STRATEGY_INTERVALS) {
-    if (!completedByInterval.has(sec)) completedByInterval.set(sec, []);
-    if (!currentByInterval.has(sec)) currentByInterval.set(sec, null);
+  for (const u of INSIDE_BAR_UNDERLYINGS) {
+    for (const sec of STRATEGY_INTERVALS) {
+      const k = key(u, sec);
+      if (!completedByKey.has(k)) completedByKey.set(k, []);
+      if (!currentByKey.has(k)) currentByKey.set(k, null);
+    }
   }
 }
 
@@ -39,7 +50,6 @@ export function get5mBoundary(ts: number): number {
 }
 
 function rollCandle(
-  intervalSec: StrategyIntervalSec,
   completed: OHLCVCandle[],
   prev: CurrentCandle | null
 ): OHLCVCandle[] {
@@ -58,64 +68,83 @@ function rollCandle(
   return next;
 }
 
-/**
- * One Doves price sample and OHLC update for all intervals.
- * Call this on every API request / server tick so candles advance even when the
- * browser tab is suspended (no reliance on a background setInterval).
- */
-export async function advanceCandlesOnce(): Promise<void> {
-  try {
+async function fetchUnderlyingPrice(u: InsideBarUnderlying): Promise<number> {
+  if (u === 'sol') {
     const { price } = await fetchDovesPrice();
-    const now = Math.floor(Date.now() / 1000);
-    ensureMaps();
-
-    for (const intervalSec of STRATEGY_INTERVALS) {
-      let completed = completedByInterval.get(intervalSec)!;
-      let current = currentByInterval.get(intervalSec);
-      const boundary = getCandleBoundary(now, intervalSec);
-
-      if (!current || current.unixTime !== boundary) {
-        if (current) {
-          completed = rollCandle(intervalSec, completed, current);
-          completedByInterval.set(intervalSec, completed);
-        }
-        currentByInterval.set(intervalSec, {
-          unixTime: boundary,
-          open: price,
-          high: price,
-          low: price,
-          close: price,
-        });
-      } else {
-        current.high = Math.max(current.high, price);
-        current.low = Math.min(current.low, price);
-        current.close = price;
-      }
-    }
-  } catch {
-    // Silently retry on next call
+    return price;
   }
+  if (u === 'btc') {
+    const { price } = await fetchPythBtcPrice();
+    return price;
+  }
+  const { price } = await fetchPythEthPrice();
+  return price;
 }
 
 /**
- * Completed candles for a bar size (newest first). Caller should await
- * {@link advanceCandlesOnce} first so data is fresh.
+ * One price sample per underlying and OHLC update for all intervals.
  */
-export function getCandles(intervalSec: StrategyIntervalSec): OHLCVCandle[] {
+export async function advanceCandlesOnce(): Promise<void> {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    ensureMaps();
+
+    for (const u of INSIDE_BAR_UNDERLYINGS) {
+      let price: number;
+      try {
+        price = await fetchUnderlyingPrice(u);
+      } catch {
+        continue;
+      }
+
+      for (const intervalSec of STRATEGY_INTERVALS) {
+        const k = key(u, intervalSec);
+        let completed = completedByKey.get(k)!;
+        let current = currentByKey.get(k);
+        const boundary = getCandleBoundary(now, intervalSec);
+
+        if (!current || current.unixTime !== boundary) {
+          if (current) {
+            completed = rollCandle(completed, current);
+            completedByKey.set(k, completed);
+          }
+          currentByKey.set(k, {
+            unixTime: boundary,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+          });
+        } else {
+          current.high = Math.max(current.high, price);
+          current.low = Math.min(current.low, price);
+          current.close = price;
+        }
+      }
+    }
+  } catch {
+    /* retry next tick */
+  }
+}
+
+export function getCandles(
+  underlying: InsideBarUnderlying,
+  intervalSec: StrategyIntervalSec
+): OHLCVCandle[] {
   ensureMaps();
-  return [...(completedByInterval.get(intervalSec) ?? [])];
+  return [...(completedByKey.get(key(underlying, intervalSec)) ?? [])];
 }
 
 export function getCurrentCandleBoundary(intervalSec: number): number {
   return getCandleBoundary(Math.floor(Date.now() / 1000), intervalSec);
 }
 
-/**
- * Minutes until 4 completed candles exist for pattern detection
- */
-export function getWarmupMinutes(intervalSec: StrategyIntervalSec): number {
+export function getWarmupMinutes(
+  underlying: InsideBarUnderlying,
+  intervalSec: StrategyIntervalSec
+): number {
   ensureMaps();
-  const completed = completedByInterval.get(intervalSec) ?? [];
+  const completed = completedByKey.get(key(underlying, intervalSec)) ?? [];
   const count = completed.length;
   if (count >= 4) return 0;
   const remaining = 4 - count;

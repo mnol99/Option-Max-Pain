@@ -26,7 +26,9 @@ import {
   TRADE_STRATEGIES,
   INSIDE_BAR_STRATEGIES,
   defaultStrategyId,
+  strategyUnderlying,
 } from '@/lib/solana-bot/strategy-tabs';
+import type { InsideBarUnderlying } from '@/lib/solana-bot/strategy-tabs';
 import { intervalLabel } from '@/lib/solana-bot/candle-intervals';
 import {
   BLK_STRATEGY_ID,
@@ -52,7 +54,7 @@ const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
 const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
-const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v5';
+const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('en-US', {
@@ -116,6 +118,10 @@ export default function TradePage() {
   );
   const [price, setPrice] = useState<number | null>(null);
   const [priceTime, setPriceTime] = useState<number | null>(null);
+  /** Live marks per underlying (SOL Doves/Pyth, BTC/ETH Pyth) — each strategy reads its underlying */
+  const [markPrices, setMarkPrices] = useState<
+    Partial<Record<InsideBarUnderlying, { price: number; time: number }>>
+  >({});
   const [candlesByStrategy, setCandlesByStrategy] = useState<Record<string, OHLCVCandle[]>>(
     () => Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, []]))
   );
@@ -344,6 +350,10 @@ export default function TradePage() {
   const activeIntervalSec = activeDef.intervalSec;
   /** Use id + kind so BLK never shows 5m/60m trades if `kind` is missing on old bundles */
   const isBlkTab = activeStrategyId === BLK_STRATEGY_ID || activeDef.kind === 'blk';
+  const activeUnderlying: InsideBarUnderlying = isBlkTab ? 'sol' : strategyUnderlying(activeDef);
+  const assetLabel =
+    activeUnderlying === 'sol' ? 'SOL' : activeUnderlying === 'btc' ? 'WBTC' : 'ETH';
+  const liveMark = markPrices[activeUnderlying];
   const state = stateByStrategy[activeStrategyId] ?? createInitialState();
   const candles = isBlkTab ? [] : (candlesByStrategy[activeStrategyId] ?? []);
   const trades = isBlkTab
@@ -353,10 +363,12 @@ export default function TradePage() {
   const breakoutConfirmCount = breakoutByStrategy[activeStrategyId] ?? { long: 0, short: 0 };
 
   const executeOnBreakout = useCallback(
-    async (side: 'long' | 'short', solPrice: number, strategyId: string) => {
+    async (side: 'long' | 'short', markPrice: number, strategyId: string) => {
       if (!publicKey || !wallet?.adapter) return;
       setExecError(null);
       const sizeUsd = liveAmountByStrategyRef.current[strategyId] ?? liveAmountToRun;
+      const def = INSIDE_BAR_STRATEGIES.find((x) => x.id === strategyId);
+      const asset = def ? strategyUnderlying(def) : 'sol';
       try {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
@@ -366,7 +378,9 @@ export default function TradePage() {
           owner: publicKey.toString(),
           sizeUsd,
           leverage,
-          solPrice: side === 'long' ? solPrice : undefined,
+          solPrice: asset === 'sol' ? markPrice : undefined,
+          btcPrice: asset === 'btc' ? markPrice : undefined,
+          asset: asset === 'btc' ? 'btc' : 'sol',
         }),
         });
         const json = await parseApiJson<{ success?: boolean; error?: string; data?: { serializedTx?: string } }>(
@@ -533,19 +547,50 @@ export default function TradePage() {
 
   const fetchPrice = useCallback(async () => {
     try {
-      const res = await fetch('/api/solana-bot/price');
-      const json = await parseApiJson<{
-        success?: boolean;
-        data?: { price?: number; timestamp?: number };
-        error?: string;
-      }>(res);
-      if (json.success && json.data?.price != null) {
-        setPrice(json.data.price);
-        setPriceTime(json.data.timestamp ?? Math.floor(Date.now() / 1000));
-        setError(null);
-      } else {
-        setError(json.error || 'Failed to fetch price');
+      const [solRes, btcRes, ethRes] = await Promise.all([
+        fetch('/api/solana-bot/price?asset=sol'),
+        fetch('/api/solana-bot/price?asset=btc'),
+        fetch('/api/solana-bot/price?asset=eth'),
+      ]);
+      const parseOne = async (res: Response) =>
+        parseApiJson<{
+          success?: boolean;
+          data?: { price?: number; timestamp?: number };
+          error?: string;
+        }>(res);
+
+      const [solJ, btcJ, ethJ] = await Promise.all([parseOne(solRes), parseOne(btcRes), parseOne(ethRes)]);
+      const next: Partial<Record<InsideBarUnderlying, { price: number; time: number }>> = {};
+      if (solJ.success && solJ.data?.price != null) {
+        next.sol = {
+          price: solJ.data.price,
+          time: solJ.data.timestamp ?? Math.floor(Date.now() / 1000),
+        };
       }
+      if (btcJ.success && btcJ.data?.price != null) {
+        next.btc = {
+          price: btcJ.data.price,
+          time: btcJ.data.timestamp ?? Math.floor(Date.now() / 1000),
+        };
+      }
+      if (ethJ.success && ethJ.data?.price != null) {
+        next.eth = {
+          price: ethJ.data.price,
+          time: ethJ.data.timestamp ?? Math.floor(Date.now() / 1000),
+        };
+      }
+      setMarkPrices(next);
+      if (next.sol) {
+        setPrice(next.sol.price);
+        setPriceTime(next.sol.time);
+      } else if (next.btc) {
+        setPrice(next.btc.price);
+        setPriceTime(next.btc.time);
+      } else if (next.eth) {
+        setPrice(next.eth.price);
+        setPriceTime(next.eth.time);
+      }
+      setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Price fetch failed');
     }
@@ -555,7 +600,10 @@ export default function TradePage() {
     try {
       const results = await Promise.all(
         INSIDE_BAR_STRATEGIES.map(async (s) => {
-          const res = await fetch(`/api/solana-bot/ohlcv?interval=${s.intervalSec}`);
+          const u = strategyUnderlying(s);
+          const res = await fetch(
+            `/api/solana-bot/ohlcv?interval=${s.intervalSec}&underlying=${u}`
+          );
           const json = await parseApiJson<{
             success?: boolean;
             data?: OHLCVCandle[];
@@ -583,6 +631,18 @@ export default function TradePage() {
         if (chartCandles && chartCandles.length > 0) {
           setPrice(chartCandles[0].close);
           setPriceTime(Math.floor(Date.now() / 1000));
+        }
+        const t = Math.floor(Date.now() / 1000);
+        const fromChart: Partial<Record<InsideBarUnderlying, { price: number; time: number }>> = {};
+        for (const s of INSIDE_BAR_STRATEGIES) {
+          const u = strategyUnderlying(s);
+          const c0 = nextCandles[s.id]?.[0]?.close;
+          if (typeof c0 === 'number' && c0 > 0 && fromChart[u] == null) {
+            fromChart[u] = { price: c0, time: t };
+          }
+        }
+        if (Object.keys(fromChart).length > 0) {
+          setMarkPrices((prev) => ({ ...prev, ...fromChart }));
         }
       }
     } catch (e) {
@@ -663,7 +723,6 @@ export default function TradePage() {
   // Price polling — live mode only (paper: server /inside-bar/tick advances simulation)
   useEffect(() => {
     if (!liveMode) return;
-    if (useChartPrice) return;
     const anyActive = INSIDE_BAR_STRATEGIES.some((s) => {
       const st = stateByStrategy[s.id];
       return (
@@ -676,7 +735,7 @@ export default function TradePage() {
     fetchPrice();
     const id = setInterval(fetchPrice, ms);
     return () => clearInterval(id);
-  }, [stateByStrategy, fetchPrice, useChartPrice, liveMode]);
+  }, [stateByStrategy, fetchPrice, liveMode]);
 
   /** Paper mode: server-side inside-bar tick (survives browser sleep / tab suspend). */
   useEffect(() => {
@@ -716,6 +775,7 @@ export default function TradePage() {
             snapshot: InsideBarServerSnapshot & { lastTickAt: number };
             price: number;
             priceTime: number;
+            pricesByStrategy?: Record<string, { price: number; time: number }>;
             candlesByStrategy: Record<string, OHLCVCandle[]>;
             warmupByStrategy: Record<string, number>;
           };
@@ -725,12 +785,23 @@ export default function TradePage() {
           snapshot: InsideBarServerSnapshot & { lastTickAt: number };
           price: number;
           priceTime: number;
+          pricesByStrategy?: Record<string, { price: number; time: number }>;
           candlesByStrategy: Record<string, OHLCVCandle[]>;
           warmupByStrategy: Record<string, number>;
         };
         paperSyncSkipRef.current = true;
         setPrice(d.price);
         setPriceTime(d.priceTime);
+        if (d.pricesByStrategy) {
+          const mp: Partial<Record<InsideBarUnderlying, { price: number; time: number }>> = {};
+          for (const s of INSIDE_BAR_STRATEGIES) {
+            const row = d.pricesByStrategy[s.id];
+            if (!row) continue;
+            const u = strategyUnderlying(s);
+            if (mp[u] == null) mp[u] = { price: row.price, time: row.time };
+          }
+          setMarkPrices(mp);
+        }
         setCandlesByStrategy((prev) => ({ ...prev, ...d.candlesByStrategy }));
         setStateByStrategy(d.snapshot.stateByStrategy);
         stateByStrategyRef.current = d.snapshot.stateByStrategy;
@@ -770,10 +841,9 @@ export default function TradePage() {
     };
   }, [liveMode, paperPositionSizeUsd, useChartPrice]);
 
-  // Process price for all strategies (one mutable state copy per tick) — live mode only
+  // Process price for all strategies (per-underlying mark) — live mode only
   useEffect(() => {
     if (!liveMode) return;
-    if (price == null || priceTime == null) return;
     if (paperSyncSkipRef.current) {
       paperSyncSkipRef.current = false;
       return;
@@ -783,27 +853,47 @@ export default function TradePage() {
     const state = { ...stateByStrategyRef.current };
     const newTrades: Record<string, ClosedTrade[]> = {};
 
-    const enrichList = (list: ClosedTrade[]): ClosedTrade[] =>
-      list.map((closedTrade) => ({
-        ...closedTrade,
-        pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
-        solAmount: positionSize / closedTrade.entryPrice,
-      }));
+    const enrichList = (list: ClosedTrade[], asset: 'sol' | 'btc' | 'eth'): ClosedTrade[] =>
+      list.map((closedTrade) => {
+        const amt = positionSize / closedTrade.entryPrice;
+        const base = {
+          ...closedTrade,
+          pnlUsd: (closedTrade.pnlPercent / 100) * positionSize,
+          asset,
+        };
+        if (asset === 'btc') return { ...base, btcAmount: amt };
+        if (asset === 'eth') return { ...base, ethAmount: amt };
+        return { ...base, solAmount: amt };
+      });
+
+    const markForStrategy = (s: (typeof INSIDE_BAR_STRATEGIES)[number]) => {
+      const c = candlesByStrategy[s.id] ?? [];
+      if (useChartPrice && c[0]?.close != null && c[0].close > 0) {
+        return { price: c[0].close, time: Math.floor(Date.now() / 1000) };
+      }
+      const u = strategyUnderlying(s);
+      return markPrices[u] ?? null;
+    };
 
     for (const s of INSIDE_BAR_STRATEGIES) {
       const sid = s.id;
       let st = state[sid];
       if (!st) continue;
 
-      if (sid === 'tf60m' && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
+      const mv = markForStrategy(s);
+      if (!mv) continue;
+      const { price: px, time: pt } = mv;
+      const asset = strategyUnderlying(s);
+
+      if (s.intervalSec === 3600 && isWeekendHalt60mEt(new Date(pt * 1000))) {
         if (st.status === 'in_position') {
-          const r = checkPositionExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+          const r = checkPositionExit({ ...st, windowEnd: pt - 1 }, px, pt);
           state[sid] = r.newState;
           if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
           continue;
         }
         if (st.status === 'reversed') {
-          const r = checkReversedExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
+          const r = checkReversedExit({ ...st, windowEnd: pt - 1 }, px, pt);
           state[sid] = r.newState;
           if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
           continue;
@@ -821,8 +911,8 @@ export default function TradePage() {
 
       if (st.status === 'pattern_detected' && st.setup && !enteringRef.current[sid]) {
         const setup = st.setup;
-        const longBreakout = isBreakoutLong(price, setup);
-        const shortBreakout = isBreakoutShort(price, setup);
+        const longBreakout = isBreakoutLong(px, setup);
+        const shortBreakout = isBreakoutShort(px, setup);
         const bc = breakoutRef.current[sid];
 
         if (longBreakout) {
@@ -833,9 +923,11 @@ export default function TradePage() {
             enteringRef.current[sid] = true;
             bc.long = 0;
             bc.short = 0;
-            st = enterLong(st, price, priceTime);
+            st = enterLong(st, px, pt);
             state[sid] = st;
-            if (liveMode && connected) void executeOnBreakout('long', price, sid);
+            if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
+              void executeOnBreakout('long', px, sid);
+            }
           }
           continue;
         }
@@ -847,9 +939,11 @@ export default function TradePage() {
             enteringRef.current[sid] = true;
             bc.long = 0;
             bc.short = 0;
-            st = enterShort(st, price, priceTime);
+            st = enterShort(st, px, pt);
             state[sid] = st;
-            if (liveMode && connected) void executeOnBreakout('short', price, sid);
+            if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
+              void executeOnBreakout('short', px, sid);
+            }
           }
           continue;
         }
@@ -862,7 +956,7 @@ export default function TradePage() {
       }
 
       if (st.status === 'in_position') {
-        const { newState, closedTrades } = checkPositionExit(st, price, priceTime);
+        const { newState, closedTrades } = checkPositionExit(st, px, pt);
         state[sid] = newState;
         if (closedTrades.length > 0) {
           newTrades[sid] = closedTrades;
@@ -871,7 +965,7 @@ export default function TradePage() {
       }
 
       if (st.status === 'reversed') {
-        const { newState, closedTrades } = checkReversedExit(st, price, priceTime);
+        const { newState, closedTrades } = checkReversedExit(st, px, pt);
         state[sid] = newState;
         if (closedTrades.length > 0) {
           newTrades[sid] = closedTrades;
@@ -886,7 +980,9 @@ export default function TradePage() {
       setTradesByStrategy((prev) => {
         const n = { ...prev };
         for (const k of Object.keys(newTrades)) {
-          const enriched = enrichList(newTrades[k]).reverse();
+          const def = INSIDE_BAR_STRATEGIES.find((x) => x.id === k);
+          const asset = def ? strategyUnderlying(def) : 'sol';
+          const enriched = enrichList(newTrades[k], asset).reverse();
           n[k] = [...enriched, ...(prev[k] ?? [])];
         }
         return n;
@@ -894,15 +990,16 @@ export default function TradePage() {
     }
 
     setBreakoutByStrategy(() => {
-      const n: Record<string, { long: number; short: number }> = {};
+      const br: Record<string, { long: number; short: number }> = {};
       for (const s of INSIDE_BAR_STRATEGIES) {
-        n[s.id] = { ...breakoutRef.current[s.id] };
+        br[s.id] = { ...breakoutRef.current[s.id] };
       }
-      return n;
+      return br;
     });
   }, [
-    price,
-    priceTime,
+    markPrices,
+    candlesByStrategy,
+    useChartPrice,
     liveMode,
     connected,
     executeOnBreakout,
@@ -943,7 +1040,7 @@ export default function TradePage() {
               ))}
             </div>
             <div className="flex items-center justify-between flex-wrap gap-4">
-              <h1 className="text-2xl font-bold text-gray-900">SOL Trading Bot</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Jupiter Perps — inside bar</h1>
               <div className="flex items-center gap-4">
                 {connected && (
                   <div className="flex items-center gap-2">
@@ -1004,19 +1101,19 @@ export default function TradePage() {
             </>
           ) : (
             <>
-              Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> bars ·
-              Each tab keeps its own state, trade log, and performance ($
-              {paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar logic runs on
-              the server every few seconds so 60m/Daily detection and time exits continue when the tab is
-              backgrounded or the PC sleeps (live mode still uses this browser + wallet).{' '}
-              <span className="font-medium">60m</span> pauses Fri 5pm–Sun 3pm ET (flatten open);{' '}
-              <span className="font-medium">Daily</span> runs continuously.
+              Viewing <span className="font-semibold">{intervalLabel(activeIntervalSec)}</span> on{' '}
+              <span className="font-semibold">{assetLabel}</span> · Each tab keeps its own state, trade log,
+              and performance (${paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar
+              logic runs on the server every few seconds.{' '}
+              <span className="font-medium">60m</span> tabs pause Fri 5pm–Sun 3pm ET (flatten open);{' '}
+              <span className="font-medium">Daily</span> tabs run continuously. Live auto-execution: SOL +
+              WBTC perps only (ETH tabs = paper until wired).
             </>
           )}
         </p>
         {!isBlkTab && warmupMinutes > 0 && candles.length < 4 && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-amber-800 font-medium">Building candle data from Jupiter Perps</p>
+            <p className="text-amber-800 font-medium">Building candle history</p>
             <p className="text-amber-700 text-sm mt-1">
               Price feed is live. First {intervalLabel(activeIntervalSec)} pattern available in ~
               {warmupMinutes} min (need 4 completed {intervalLabel(activeIntervalSec)} candles).
@@ -1267,22 +1364,25 @@ export default function TradePage() {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">SOL Price (last candle)</span>
+                    <span className="text-gray-600">{assetLabel} price (last candle)</span>
                     <span className="font-mono font-medium">
                       {candles.length > 0 ? `$${formatPrice(candles[0].close)}` : '—'}
                     </span>
                   </div>
                   <p className="text-xs text-gray-500">
-                    Jupiter Perps — last {intervalLabel(activeIntervalSec)} close
+                    {activeUnderlying === 'sol' ? 'Doves oracle' : 'Pyth'} — last{' '}
+                    {intervalLabel(activeIntervalSec)} close
                   </p>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">SOL Price (live)</span>
+                    <span className="text-gray-600">{assetLabel} price (live)</span>
                     <span className="font-mono font-medium">
-                      {price != null ? `$${formatPrice(price)}` : '—'}
+                      {liveMark != null ? `$${formatPrice(liveMark.price)}` : '—'}
                     </span>
                   </div>
                   <p className="text-xs text-gray-500">
-                    Jupiter Perps (Doves) — matches execution
+                    {activeUnderlying === 'sol'
+                      ? 'Doves / Pyth (SOL) — matches Jupiter SOL perp execution'
+                      : 'Pyth USD mark — pattern + paper sim; live auto-exec: SOL + WBTC perps only'}
                   </p>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -1437,7 +1537,7 @@ export default function TradePage() {
                   <p className="text-xs text-gray-500 mb-3">
                 {isBlkTab
                   ? 'Session open (paper short) then 18 cover round-turns (short + buy per slice) with PnL each.'
-                  : 'Entry: SOL amount @ price · time · Exit: price · time · PnL'}
+                  : 'Entry: position size @ price · time · Exit: price · time · PnL'}
               </p>
               <div className="max-h-80 overflow-y-auto space-y-3">
                 {trades.length === 0 ? (
@@ -1503,16 +1603,14 @@ export default function TradePage() {
                               PnL accrues on cover rows below (one row per 10m slot).
                             </p>
                           </>
-                        ) : (
+                        ) : t.exitReason === 'blk_cover' ? (
                           <>
                             <div className="flex flex-wrap gap-x-2">
                               <span className="text-gray-600 font-medium">Short leg:</span>
                               <span>
                                 {t.asset === 'btc' && t.btcAmount != null
                                   ? `${t.btcAmount.toFixed(6)} BTC`
-                                  : t.solAmount != null
-                                    ? `${t.solAmount.toFixed(4)} SOL`
-                                    : '—'}
+                                  : '—'}
                                 {' @ $'}
                                 <span className="font-mono">{formatPrice(t.entryPrice)}</span>
                               </span>
@@ -1535,8 +1633,48 @@ export default function TradePage() {
                               </span>
                             </div>
                           </>
+                        ) : (
+                          <>
+                            <p className="text-gray-700">
+                              {t.side === 'long' ? 'Long' : 'Short'}{' '}
+                              <span className="font-mono">
+                                {t.asset === 'btc' && t.btcAmount != null
+                                  ? `${t.btcAmount.toFixed(6)} BTC`
+                                  : t.asset === 'eth' && t.ethAmount != null
+                                    ? `${t.ethAmount.toFixed(4)} ETH`
+                                    : t.solAmount != null
+                                      ? `${t.solAmount.toFixed(4)} SOL`
+                                      : '—'}
+                              </span>{' '}
+                              @ <span className="font-mono">${formatPrice(t.entryPrice)}</span>
+                              <span className="text-gray-500 font-mono text-xs">
+                                {' · '}
+                                {formatTime(t.entryTime)}
+                              </span>
+                            </p>
+                            <p className="text-gray-700">
+                              Exit: <span className="font-mono">${formatPrice(t.exitPrice)}</span>
+                              <span className="text-gray-500 font-mono text-xs">
+                                {' · '}
+                                {formatTime(t.exitTime)}
+                              </span>
+                            </p>
+                          </>
                         )}
-                        {t.exitReason !== 'blk_open' && (
+                        {t.exitReason !== 'blk_open' && t.exitReason !== 'blk_cover' && (
+                          <div
+                            className={`font-mono font-semibold pt-1 ${
+                              t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}
+                          >
+                            PnL:{' '}
+                            {t.pnlUsd != null
+                              ? `${t.pnlUsd >= 0 ? '+' : ''}$${t.pnlUsd.toFixed(2)}`
+                              : `${t.pnl >= 0 ? '+' : ''}$${formatPrice(t.pnl)}`}
+                            {' '}({t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%)
+                          </div>
+                        )}
+                        {t.exitReason === 'blk_cover' && (
                           <div
                             className={`font-mono font-semibold pt-1 ${
                               t.pnl >= 0 ? 'text-green-600' : 'text-red-600'
@@ -1679,8 +1817,10 @@ export default function TradePage() {
               ) : (
                 <>
                   <p className="text-xs text-gray-500 mb-2">
-                    Built from Jupiter Perps (Doves oracle), polled every 15s. Jupiter&apos;s chart may use
-                    different data/aggregation—small differences possible.
+                    {activeUnderlying === 'sol'
+                      ? 'SOL: Doves oracle (Jupiter Perps), advanced on server ticks.'
+                      : 'Pyth USD mark — aligned with perp reference pricing.'}{' '}
+                    Exchange charts may differ slightly.
                   </p>
                   <div className="text-sm overflow-x-auto">
                     <table className="w-full">

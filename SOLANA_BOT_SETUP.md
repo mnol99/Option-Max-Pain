@@ -16,7 +16,7 @@ The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET 
    - Go to [/trade](/trade)
 
 3. **Trade window**
-   - Use the **60m**, **Daily**, and **BLK** tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**). In **paper** mode, inside-bar simulation also runs **on the server** (POST `/api/solana-bot/inside-bar/tick` every few seconds plus a background heartbeat) so pattern detection and time exits keep advancing if the browser tab sleeps. **Live** mode still depends on this browser + wallet for execution.
+   - Use the **60m**, **Daily**, **ETH 60m**, **ETH Daily**, **BTC 60m**, **BTC Daily**, and **BLK** tabs; each has its own candles, state, trade log, and performance (default **$1,000** position per strategy in paper mode; combined paper balance default **$3,000**). SOL uses **Doves** candles; **BTC** and **ETH** use **Pyth** USD marks for OHLC. In **paper** mode, inside-bar simulation also runs **on the server** (POST `/api/solana-bot/inside-bar/tick` every few seconds plus a background heartbeat). **Live** auto-execution: **SOL** and **WBTC** perps only; ETH tabs are paper until execution is wired.
    - Paper-trade simulation: no real execution until Live mode
    - Metrics: PnL, win rate, Sharpe ratio (per tab)
 
