@@ -23,6 +23,12 @@ interface PollPayload {
   inLegacySignalWindow: boolean;
   inDetectWindow: boolean;
   pollSourceWatchAddresses?: boolean;
+  arkham?: {
+    configured: boolean;
+    transferBase: string;
+    timeLast: string;
+    error?: string;
+  };
   detection: {
     strictFilters: boolean;
     mainDepositAddress: string;
@@ -38,7 +44,8 @@ interface PollPayload {
     sourceAddress: string;
     inputSourceAddresses?: string[];
     watchListMatch?: boolean;
-    signalSource?: 'coinbase_deposit' | 'source_watch' | 'extra_txid';
+    signalSource?: 'coinbase_deposit' | 'source_watch' | 'extra_txid' | 'arkham';
+    arkhamEntityBase?: string;
     sats: number;
     mainOutSats?: number;
     mainOutBtc?: number;
@@ -472,10 +479,20 @@ export default function IbitPage() {
           <h2 className="text-lg font-semibold">Recent signals</h2>
           <p className="text-xs text-gray-600">
             Primary path: monitor <strong>Coinbase deposit</strong> addresses for large (~200+ BTC) transfers
-            to the main output; sender addresses come from tx inputs. Optional{' '}
+            to the main output; sender addresses come from tx inputs. With{' '}
+            <code className="bg-gray-100 px-1">ARKHAM_API_KEY</code>, Arkham{' '}
+            <code className="bg-gray-100 px-1">GET /transfers</code> (entity <code className="bg-gray-100 px-1">base</code>,
+            Bitcoin out) supplies tx hashes; each tx is validated on Blockstream. Optional{' '}
             <code className="bg-gray-100 px-1">IBIT_POLL_SOURCE_WATCH=1</code> also polls legacy custodian
             source addresses.
           </p>
+          {poll?.arkham?.configured && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              Arkham: base=<span className="font-mono">{poll.arkham.transferBase}</span>, window=
+              <span className="font-mono">{poll.arkham.timeLast}</span>
+              {poll.arkham.error ? ` — error: ${poll.arkham.error}` : ''}
+            </p>
+          )}
           {poll?.batchGroups && poll.batchGroups.length > 0 && (
             <div className="text-sm">
               <p className="font-medium text-gray-800 mb-1">Same-block batches</p>
@@ -530,6 +547,22 @@ export default function IbitPage() {
             </li>
             <li>
               <code>IBIT_POLL_SOURCE_WATCH=1</code> — also poll legacy source watch addresses (default off)
+            </li>
+            <li>
+              <code>ARKHAM_API_KEY</code> — Arkham Intel API key (header <code>API-Key</code>); never commit
+            </li>
+            <li>
+              <code>ARKHAM_TRANSFER_BASE</code> — entity slug for <code>GET /transfers?base=</code> (default{' '}
+              <code>blackrock</code> — confirm in Arkham UI)
+            </li>
+            <li>
+              <code>ARKHAM_TIME_LAST</code> — e.g. <code>24h</code>, <code>7d</code> (default <code>7d</code>)
+            </li>
+            <li>
+              <code>ARKHAM_TRANSFER_LIMIT</code> — rows per poll (default 25, max 50)
+            </li>
+            <li>
+              <code>ARKHAM_DISABLE_IBIT_POLL=1</code> — skip Arkham even if key is set
             </li>
             <li>
               <code>IBIT_MIN_SATS</code> — optional minimum transfer size (default 100000)

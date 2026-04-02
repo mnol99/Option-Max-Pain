@@ -99,8 +99,10 @@ export interface ClosedTrade {
   ibitPrimarySourceAddress?: string;
   /** IBIT: any input matched legacy custodian watch list */
   ibitWatchListMatch?: boolean;
-  /** IBIT: coinbase_deposit | source_watch | extra_txid */
+  /** IBIT: coinbase_deposit | source_watch | extra_txid | arkham */
   ibitSignalSource?: string;
+  /** IBIT: Arkham GET /transfers `base` when signal came from Arkham */
+  ibitArkhamEntityBase?: string;
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,

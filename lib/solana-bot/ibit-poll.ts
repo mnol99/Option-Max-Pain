@@ -7,7 +7,12 @@ import {
   sumToAddresses,
   sumToAddress,
 } from '@/lib/solana-bot/bitcoin-blockstream';
+import { arkhamTxHash, fetchArkhamBitcoinTransfersForBase } from '@/lib/solana-bot/arkham-transfers';
 import {
+  getArkhamApiKey,
+  getArkhamTimeLast,
+  getArkhamTransferBase,
+  getArkhamTransferLimit,
   getIbitCoinbaseAddressTxLimit,
   getIbitCoinbaseDestinationAddresses,
   getIbitDetectEndMinEt,
@@ -18,6 +23,7 @@ import {
   getIbitMainOutMinBtc,
   getIbitMinSats,
   getIbitWatchSourceAddresses,
+  isArkhamIbitPollEnabled,
   isIbitAllowHistoricalBlockDay,
   isIbitPollSourceWatchAddresses,
   isIbitStrictFiltersEnabled,
@@ -44,8 +50,10 @@ export interface IbitTransferSignal {
   inputSourceAddresses: string[];
   /** Any input address appears in the optional legacy custodian watch list */
   watchListMatch: boolean;
-  /** coinbase_deposit = seen from monitoring Coinbase recv first; source_watch = legacy poll; extra_txid = IBIT_EXTRA_TXIDS */
-  signalSource: 'coinbase_deposit' | 'source_watch' | 'extra_txid';
+  /** coinbase_deposit | source_watch | extra_txid | arkham (Arkham GET /transfers → Blockstream validate) */
+  signalSource: 'coinbase_deposit' | 'source_watch' | 'extra_txid' | 'arkham';
+  /** When signalSource is arkham: `base` entity used in the API query */
+  arkhamEntityBase?: string;
   /** Total sats to any watched Coinbase destination */
   sats: number;
   /** Sats to main Prime deposit address (large leg) */
@@ -129,6 +137,13 @@ export async function pollIbitTransfers(): Promise<{
   inDetectWindow: boolean;
   /** True when also polling legacy source watch addresses (env IBIT_POLL_SOURCE_WATCH=1) */
   pollSourceWatchAddresses: boolean;
+  /** Arkham Intel: outgoing BTC for `base` → tx hashes → Blockstream validate */
+  arkham?: {
+    configured: boolean;
+    transferBase: string;
+    timeLast: string;
+    error?: string;
+  };
   detection: {
     strictFilters: boolean;
     mainDepositAddress: string;
@@ -162,6 +177,11 @@ export async function pollIbitTransfers(): Promise<{
       inLegacySignalWindow: isWithinSignalWindowEt(),
       inDetectWindow: nowInActiveDetectWindow(),
       pollSourceWatchAddresses: pollWatch,
+      arkham: {
+        configured: !!getArkhamApiKey(),
+        transferBase: getArkhamTransferBase(),
+        timeLast: getArkhamTimeLast(),
+      },
       detection: {
         strictFilters: strict,
         mainDepositAddress: mainDeposit,
@@ -181,7 +201,8 @@ export async function pollIbitTransfers(): Promise<{
 
   const buildSignal = (
     tx: BlockstreamTxRef,
-    signalSource: IbitTransferSignal['signalSource']
+    signalSource: IbitTransferSignal['signalSource'],
+    arkhamEntityBase?: string
   ): IbitTransferSignal | null => {
     if (seen.has(tx.txid)) return null;
     const { sats, destinations } = sumToAddresses(tx, destSet);
@@ -208,9 +229,11 @@ export async function pollIbitTransfers(): Promise<{
     const primary = primaryInputSourceAddress(tx);
     const watchListMatch = inputSourceAddresses.some((a) => watchSet.has(a));
     const sourceAddress =
-      primary ?? inputSourceAddresses[0] ?? (signalSource === 'extra_txid' ? 'extra-txid' : 'unknown');
+      primary ??
+      inputSourceAddresses[0] ??
+      (signalSource === 'extra_txid' ? 'extra-txid' : signalSource === 'arkham' ? 'arkham' : 'unknown');
 
-    return {
+    const out: IbitTransferSignal = {
       txid: tx.txid,
       blockTime,
       sourceAddress,
@@ -224,13 +247,16 @@ export async function pollIbitTransfers(): Promise<{
       coverScheduleUtc,
       detectionMode: mode,
     };
+    if (arkhamEntityBase) out.arkhamEntityBase = arkhamEntityBase;
+    return out;
   };
 
   const processTx = (
     tx: BlockstreamTxRef,
-    signalSource: IbitTransferSignal['signalSource']
+    signalSource: IbitTransferSignal['signalSource'],
+    arkhamEntityBase?: string
   ): void => {
-    const sig = buildSignal(tx, signalSource);
+    const sig = buildSignal(tx, signalSource, arkhamEntityBase);
     if (sig) signals.push(sig);
   };
 
@@ -241,6 +267,40 @@ export async function pollIbitTransfers(): Promise<{
       if (tx) processTx(tx, 'extra_txid');
     } catch {
       /* ignore */
+    }
+  }
+
+  let arkhamMeta: { configured: boolean; transferBase: string; timeLast: string; error?: string } = {
+    configured: false,
+    transferBase: getArkhamTransferBase(),
+    timeLast: getArkhamTimeLast(),
+  };
+
+  /** 1b) Arkham Intel API — entity `base` outgoing BTC, then validate full tx on Blockstream */
+  const arkhamKey = getArkhamApiKey();
+  if (isArkhamIbitPollEnabled() && arkhamKey) {
+    arkhamMeta.configured = true;
+    const transferBase = getArkhamTransferBase();
+    arkhamMeta.transferBase = transferBase;
+    arkhamMeta.timeLast = getArkhamTimeLast();
+    const { transfers, error: arkErr } = await fetchArkhamBitcoinTransfersForBase({
+      apiKey: arkhamKey,
+      transferBase,
+      limit: getArkhamTransferLimit(),
+      timeLast: getArkhamTimeLast(),
+    });
+    if (arkErr) arkhamMeta.error = arkErr;
+    const seenArkhamHashes = new Set<string>();
+    for (const at of transfers) {
+      const h = arkhamTxHash(at);
+      if (!h || seenArkhamHashes.has(h)) continue;
+      seenArkhamHashes.add(h);
+      try {
+        const tx = await fetchTx(h);
+        if (tx) processTx(tx, 'arkham', transferBase);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -334,6 +394,7 @@ export async function pollIbitTransfers(): Promise<{
     inLegacySignalWindow: isWithinSignalWindowEt(),
     inDetectWindow: nowInActiveDetectWindow(),
     pollSourceWatchAddresses: pollWatch,
+    arkham: arkhamMeta,
     detection: {
       strictFilters: strict,
       mainDepositAddress: mainDeposit,

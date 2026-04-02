@@ -251,6 +251,7 @@ export default function TradePage() {
           ibitPrimarySourceAddress?: string | null;
           ibitWatchListMatch?: boolean;
           ibitSignalSource?: string | null;
+          ibitArkhamEntityBase?: string | null;
         };
         if (bs.coverSliceCount == null && bs.coverScheduleUtc?.length) {
           bs.coverSliceCount = bs.coverScheduleUtc.length;
@@ -269,6 +270,7 @@ export default function TradePage() {
         if (bs.ibitPrimarySourceAddress === undefined) bs.ibitPrimarySourceAddress = null;
         if (bs.ibitWatchListMatch == null) bs.ibitWatchListMatch = false;
         if (bs.ibitSignalSource === undefined) bs.ibitSignalSource = null;
+        if (bs.ibitArkhamEntityBase === undefined) bs.ibitArkhamEntityBase = null;
         if (bs.collateralUsd == null || bs.leverage == null) {
           if (bs.status === 'short_open') {
             // Legacy: notionalUsd was full USD short size at 1× (no separate collateral/leverage)
@@ -443,6 +445,7 @@ export default function TradePage() {
               inputSourceAddresses?: string[];
               watchListMatch?: boolean;
               signalSource?: string;
+              arkhamEntityBase?: string;
             }>;
           };
         }>(res);
@@ -455,6 +458,7 @@ export default function TradePage() {
           inputSourceAddresses?: string[];
           watchListMatch?: boolean;
           signalSource?: string;
+          arkhamEntityBase?: string;
         }>;
         const price = btcPrice;
         setBlkPaperState((prev) => {
@@ -483,7 +487,11 @@ export default function TradePage() {
                 inputSourceAddresses: inputs,
                 primarySourceAddress: primary,
                 watchListMatch: sig.watchListMatch ?? false,
-                signalSource: sig.signalSource ?? 'coinbase_deposit',
+                signalSource:
+                  sig.signalSource === 'arkham'
+                    ? 'arkham'
+                    : (sig.signalSource ?? 'coinbase_deposit'),
+                arkhamEntityBase: sig.arkhamEntityBase,
               }
             );
           }
@@ -1186,7 +1194,13 @@ export default function TradePage() {
                           <span className="font-mono">
                             {blkPaperState.ibitSignalSource === 'coinbase_deposit'
                               ? 'Coinbase deposit (large in) → sender from inputs'
-                              : blkPaperState.ibitSignalSource}
+                              : blkPaperState.ibitSignalSource === 'arkham'
+                                ? `Arkham (entity out) → Blockstream validate${
+                                    blkPaperState.ibitArkhamEntityBase
+                                      ? ` · base=${blkPaperState.ibitArkhamEntityBase}`
+                                      : ''
+                                  }`
+                                : blkPaperState.ibitSignalSource}
                           </span>
                           {blkPaperState.ibitWatchListMatch ? ' · watch-list match' : ''}
                         </p>

@@ -149,3 +149,38 @@ export function getIbitCoinbaseAddressTxLimit(): number {
   if (Number.isFinite(n) && n >= 5 && n <= 100) return Math.floor(n);
   return 50;
 }
+
+/** Arkham Intel API key (`API-Key` header). Do not commit. */
+export function getArkhamApiKey(): string | undefined {
+  const k = process.env.ARKHAM_API_KEY?.trim();
+  return k || undefined;
+}
+
+/**
+ * `base` filter for GET /transfers (entity slug or address), e.g. Arkham’s IBIT / BlackRock entity.
+ * Override if your dashboard uses a different entity id.
+ */
+export function getArkhamTransferBase(): string {
+  const e = process.env.ARKHAM_TRANSFER_BASE?.trim();
+  if (e) return e;
+  return 'blackrock';
+}
+
+/** Recent window for Arkham `timeLast` (e.g. 24h, 7d). */
+export function getArkhamTimeLast(): string {
+  const e = process.env.ARKHAM_TIME_LAST?.trim();
+  if (e) return e;
+  return '7d';
+}
+
+/** Max Arkham rows per poll (each matching tx still fetches Blockstream for validation). */
+export function getArkhamTransferLimit(): number {
+  const n = Number(process.env.ARKHAM_TRANSFER_LIMIT);
+  if (Number.isFinite(n) && n >= 5 && n <= 50) return Math.floor(n);
+  return 25;
+}
+
+/** Set to `0` to skip Arkham even when `ARKHAM_API_KEY` is set. */
+export function isArkhamIbitPollEnabled(): boolean {
+  return process.env.ARKHAM_DISABLE_IBIT_POLL !== '1';
+}

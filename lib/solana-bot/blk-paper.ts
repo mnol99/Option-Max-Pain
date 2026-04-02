@@ -47,8 +47,10 @@ export interface BlkPaperState {
   ibitPrimarySourceAddress: string | null;
   /** Any input was on the optional legacy custodian watch list */
   ibitWatchListMatch: boolean;
-  /** coinbase_deposit | source_watch | extra_txid */
+  /** coinbase_deposit | source_watch | extra_txid | arkham */
   ibitSignalSource: string | null;
+  /** When source is arkham: GET /transfers `base` entity */
+  ibitArkhamEntityBase: string | null;
   /** Cumulative realized PnL (USD) from covers completed so far */
   cumulativePnlUsd: number;
 }
@@ -76,6 +78,7 @@ export function createBlkInitialState(overrides?: Partial<Pick<BlkPaperState, 'l
     ibitPrimarySourceAddress: null,
     ibitWatchListMatch: false,
     ibitSignalSource: null,
+    ibitArkhamEntityBase: null,
     cumulativePnlUsd: 0,
   };
 }
@@ -92,6 +95,7 @@ export function createBlkShortOpenState(
     primarySourceAddress: string | null;
     watchListMatch: boolean;
     signalSource: string;
+    arkhamEntityBase?: string;
   }
 ): BlkPaperState {
   const anchor = new Date(signalTimeSec * 1000);
@@ -120,6 +124,10 @@ export function createBlkShortOpenState(
     ibitPrimarySourceAddress: ibitMeta?.primarySourceAddress ?? null,
     ibitWatchListMatch: ibitMeta?.watchListMatch ?? false,
     ibitSignalSource: ibitMeta?.signalSource ?? null,
+    ibitArkhamEntityBase:
+      ibitMeta?.signalSource === 'arkham' && ibitMeta?.arkhamEntityBase
+        ? ibitMeta.arkhamEntityBase
+        : null,
     cumulativePnlUsd: 0,
   };
 }
@@ -156,6 +164,10 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
     ibitPrimarySourceAddress: prev.ibitPrimarySourceAddress ?? undefined,
     ibitWatchListMatch: prev.ibitWatchListMatch || undefined,
     ibitSignalSource: prev.ibitSignalSource ?? undefined,
+    ibitArkhamEntityBase:
+      prev.ibitSignalSource === 'arkham' && prev.ibitArkhamEntityBase
+        ? prev.ibitArkhamEntityBase
+        : undefined,
   };
 }
 
@@ -231,6 +243,10 @@ export function processBlkPaperTick(
     ibitPrimarySourceAddress: next.ibitPrimarySourceAddress ?? undefined,
     ibitWatchListMatch: next.ibitWatchListMatch || undefined,
     ibitSignalSource: next.ibitSignalSource ?? undefined,
+    ibitArkhamEntityBase:
+      next.ibitSignalSource === 'arkham' && next.ibitArkhamEntityBase
+        ? next.ibitArkhamEntityBase
+        : undefined,
   });
 
   if (next.nextSliceIndex >= n) {
