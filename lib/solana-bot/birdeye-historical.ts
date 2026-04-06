@@ -10,8 +10,23 @@ const BIRDEYE_BASE = 'https://public-api.birdeye.so';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 /** Jupiter WBTC custody mint (Birdeye OHLCV address) */
 const WBTC_MINT = '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh';
-/** Portal WETH (override with BIRDEYE_ETH_MINT if Birdeye returns no rows) */
+/** Portal / Wormhole WETH (Birdeye may list a different canonical mint — see `birdeyeEthMintCandidates`) */
 const DEFAULT_WETH_MINT = '7vfCXTUXx5WJV5JADk17DUJ4kszgou87GMc9Bdw6BvB';
+
+/** Alternate WETH mints to try when OHLCV returns empty (comma-separated `BIRDEYE_ETH_MINTS` prepended). */
+const DEFAULT_ETH_MINT_FALLBACKS = [
+  DEFAULT_WETH_MINT,
+  '4yrHms7ekgTBgJg77zJ33TsWrraqHsCXDtuSZqUsuGHb', // common WETH on Solana DEX listings
+];
+
+export function birdeyeEthMintCandidates(): string[] {
+  const fromEnv = process.env.BIRDEYE_ETH_MINTS?.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const single = process.env.BIRDEYE_ETH_MINT?.trim();
+  const list = [...(fromEnv ?? []), ...(single ? [single] : []), ...DEFAULT_ETH_MINT_FALLBACKS];
+  return Array.from(new Set(list));
+}
 
 export function birdeyeMintForUnderlying(u: InsideBarUnderlying): string {
   if (u === 'sol') return SOL_MINT;
@@ -55,8 +70,19 @@ export async function fetchHistoricalOHLCVForMint(
     mintOrUnderlying === 'sol' || mintOrUnderlying === 'btc' || mintOrUnderlying === 'eth'
       ? birdeyeMintForUnderlying(mintOrUnderlying)
       : mintOrUnderlying;
+  return fetchHistoricalOHLCVForAddress(mint, timeFrom, timeTo, apiKey, interval);
+}
+
+/** Raw mint address (not `eth` / `sol` alias). */
+export async function fetchHistoricalOHLCVForAddress(
+  mintAddress: string,
+  timeFrom: number,
+  timeTo: number,
+  apiKey: string,
+  interval: '5m' | '1h' | '1d' = '5m'
+): Promise<OHLCVCandle[]> {
   const type = interval === '5m' ? '5m' : interval === '1h' ? '1H' : '1D';
-  const url = `${BIRDEYE_BASE}/defi/ohlcv?address=${mint}&type=${type}&time_from=${timeFrom}&time_to=${timeTo}&currency=usd`;
+  const url = `${BIRDEYE_BASE}/defi/ohlcv?address=${mintAddress}&type=${type}&time_from=${timeFrom}&time_to=${timeTo}&currency=usd`;
   const res = await fetch(url, { headers: { 'X-API-KEY': apiKey } });
   if (!res.ok) {
     throw new Error(`Birdeye OHLCV failed: ${res.status}`);

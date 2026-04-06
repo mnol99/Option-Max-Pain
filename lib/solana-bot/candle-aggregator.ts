@@ -47,8 +47,10 @@ const currentByKey = new Map<string, CurrentCandle | null>();
 
 let candleDiskLoaded = false;
 
-/** One Birdeye backfill attempt per (underlying × interval) per process if disk is cold. */
-const birdeyeBackfillTried = new Set<string>();
+/** Successful Birdeye seed for (underlying × interval). Failed fetches retry every `BIRDEYE_BACKFILL_RETRY_MS`. */
+const birdeyeBackfillSucceeded = new Set<string>();
+const birdeyeBackfillLastAttempt = new Map<string, number>();
+const BIRDEYE_BACKFILL_RETRY_MS = 60_000;
 
 function isCandlePersistenceEnabled(): boolean {
   if (process.env.INSIDE_BAR_DISABLE_CANDLE_PERSIST === '1') return false;
@@ -180,14 +182,19 @@ async function maybeBirdeyeBackfill(
   nowSec: number
 ): Promise<void> {
   const k = key(u, intervalSec);
-  if (birdeyeBackfillTried.has(k)) return;
+  if (birdeyeBackfillSucceeded.has(k)) return;
   const completed = completedByKey.get(k) ?? [];
   if (!shouldRunBirdeyeBackfill(completed.length, intervalSec)) return;
 
+  const nowMs = Date.now();
+  const last = birdeyeBackfillLastAttempt.get(k) ?? 0;
+  if (nowMs - last < BIRDEYE_BACKFILL_RETRY_MS && last > 0) return;
+  birdeyeBackfillLastAttempt.set(k, nowMs);
+
   const backfilled = await fetchBirdeyeBackfillCompleted(u, intervalSec, nowSec);
-  birdeyeBackfillTried.add(k);
   if (!backfilled?.length) return;
 
+  birdeyeBackfillSucceeded.add(k);
   completedByKey.set(k, backfilled.slice(0, MAX_COMPLETED));
   const cur = currentByKey.get(k) ?? null;
   currentByKey.set(k, trimCurrentIfOverlapsBackfill(cur, backfilled, intervalSec, nowSec));

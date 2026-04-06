@@ -3,7 +3,11 @@
  * after a cold start. Uses the same Birdeye key as backtest; live ticks still use Doves/Pyth.
  */
 
-import { fetchHistoricalOHLCVForMint } from '@/lib/solana-bot/birdeye-historical';
+import {
+  fetchHistoricalOHLCVForAddress,
+  fetchHistoricalOHLCVForMint,
+  birdeyeEthMintCandidates,
+} from '@/lib/solana-bot/birdeye-historical';
 import type { OHLCVCandle } from '@/lib/solana-bot/types';
 import {
   STRATEGY_INTERVALS,
@@ -29,6 +33,57 @@ function closedHourlyBars(items: OHLCVCandle[], nowSec: number): OHLCVCandle[] {
 /** Newest first (matches candle-aggregator completed order). */
 function sortNewestFirst(items: OHLCVCandle[]): OHLCVCandle[] {
   return [...items].sort((a, b) => b.unixTime - a.unixTime);
+}
+
+async function fetchEthHourlyWithMintFallback(
+  timeFrom: number,
+  timeTo: number,
+  apiKey: string
+): Promise<OHLCVCandle[]> {
+  for (const mint of birdeyeEthMintCandidates()) {
+    const rows = await fetchHistoricalOHLCVForAddress(mint, timeFrom, timeTo, apiKey, '1h');
+    if (rows.length > 0) return rows;
+  }
+  return [];
+}
+
+function mapBirdeye1dToEtDailyBars(
+  items: OHLCVCandle[],
+  nowSec: number
+): OHLCVCandle[] {
+  const closed = items.filter((c) => c.unixTime > 0);
+  const dailies: OHLCVCandle[] = [];
+  for (const c of closed) {
+    const dayStart = getEtDaily8pmBarStartUnix(c.unixTime);
+    if (dayStart + DAILY_BAR_SEC >= nowSec) continue;
+    dailies.push({
+      unixTime: dayStart,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    });
+  }
+  const groups = new Map<number, OHLCVCandle[]>();
+  for (const c of dailies) {
+    const list = groups.get(c.unixTime) ?? [];
+    list.push(c);
+    groups.set(c.unixTime, list);
+  }
+  const merged: OHLCVCandle[] = [];
+  for (const [dayStart, g] of Array.from(groups.entries())) {
+    const sorted = [...g].sort((a, b) => a.unixTime - b.unixTime);
+    merged.push({
+      unixTime: dayStart,
+      open: sorted[0]!.open,
+      high: Math.max(...sorted.map((x) => x.high)),
+      low: Math.min(...sorted.map((x) => x.low)),
+      close: sorted[sorted.length - 1]!.close,
+      volume: sorted.reduce((s, x) => s + x.volume, 0),
+    });
+  }
+  return sortNewestFirst(merged);
 }
 
 function aggregateHourlyToEtDaily(
@@ -82,13 +137,17 @@ export async function fetchBirdeyeBackfillCompleted(
 
   let raw: OHLCVCandle[];
   try {
-    raw = await fetchHistoricalOHLCVForMint(
-      underlying,
-      timeFrom,
-      timeTo,
-      apiKey,
-      '1h'
-    );
+    if (underlying === 'eth') {
+      raw = await fetchEthHourlyWithMintFallback(timeFrom, timeTo, apiKey);
+    } else {
+      raw = await fetchHistoricalOHLCVForMint(
+        underlying,
+        timeFrom,
+        timeTo,
+        apiKey,
+        '1h'
+      );
+    }
   } catch {
     return null;
   }
@@ -100,7 +159,31 @@ export async function fetchBirdeyeBackfillCompleted(
   }
 
   if (intervalSec === 86400) {
-    const dailies = aggregateHourlyToEtDaily(raw, nowSec);
+    let dailies = aggregateHourlyToEtDaily(raw, nowSec);
+    if (dailies.length < NEED) {
+      try {
+        const timeFrom1d = nowSec - 60 * 86400;
+        let oneDay: OHLCVCandle[];
+        if (underlying === 'eth') {
+          oneDay = [];
+          for (const mint of birdeyeEthMintCandidates()) {
+            oneDay = await fetchHistoricalOHLCVForAddress(mint, timeFrom1d, timeTo, apiKey, '1d');
+            if (oneDay.length > 0) break;
+          }
+        } else {
+          oneDay = await fetchHistoricalOHLCVForMint(
+            underlying,
+            timeFrom1d,
+            timeTo,
+            apiKey,
+            '1d'
+          );
+        }
+        dailies = mapBirdeye1dToEtDailyBars(oneDay, nowSec);
+      } catch {
+        /* keep hourly-derived dailies */
+      }
+    }
     if (dailies.length < NEED) return null;
     return dailies.slice(0, NEED);
   }
