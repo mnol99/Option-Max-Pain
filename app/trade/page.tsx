@@ -57,6 +57,8 @@ const INSIDE_BAR_SERVER_SYNC_MS = 3000;
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 /** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
 const BLK_PROCESSED_TXIDS_KEY = 'solana-bot-blk-processed-txids-v1';
+/** ET calendar days (YYYY-MM-DD) that already had a BLK session — blocks 2nd tx same morning */
+const BLK_TRADED_ET_DAYS_KEY = 'solana-bot-blk-traded-et-days-v1';
 const MAX_BLK_TXID_CACHE = 500;
 
 function formatTime(ts: number): string {
@@ -162,15 +164,18 @@ export default function TradePage() {
   const blkPaperStateRef = useRef(blkPaperState);
   blkPaperStateRef.current = blkPaperState;
   const blkProcessedSignalsRef = useRef<Set<string>>(new Set());
+  const blkTradedEtDaysRef = useRef<Set<string>>(new Set());
 
   const clearBlkPaperHistory = useCallback(() => {
     const fresh = createBlkInitialState();
     blkPaperStateRef.current = fresh;
     setBlkPaperState(fresh);
     blkProcessedSignalsRef.current = new Set();
+    blkTradedEtDaysRef.current = new Set();
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(BLK_PROCESSED_TXIDS_KEY);
+        localStorage.removeItem(BLK_TRADED_ET_DAYS_KEY);
       } catch {
         /* ignore */
       }
@@ -224,13 +229,20 @@ export default function TradePage() {
     try {
       const arr = Array.from(blkProcessedSignalsRef.current).slice(-MAX_BLK_TXID_CACHE);
       localStorage.setItem(BLK_PROCESSED_TXIDS_KEY, JSON.stringify(arr));
+      localStorage.setItem(
+        BLK_TRADED_ET_DAYS_KEY,
+        JSON.stringify(Array.from(blkTradedEtDaysRef.current))
+      );
     } catch {
       /* quota / private mode */
     }
     void fetch('/api/solana-bot/blk/processed-txids', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ txids: Array.from(blkProcessedSignalsRef.current) }),
+      body: JSON.stringify({
+        txids: Array.from(blkProcessedSignalsRef.current),
+        tradedEtDayKeys: Array.from(blkTradedEtDaysRef.current),
+      }),
     }).catch(() => {
       /* server dedupe optional */
     });
@@ -320,6 +332,9 @@ export default function TradePage() {
           }
         }
         setBlkPaperState(bs as BlkPaperState);
+        if (bs.lastSessionEtDayKey) {
+          blkTradedEtDaysRef.current.add(bs.lastSessionEtDayKey);
+        }
       }
       if (p.entering) {
         for (const s of INSIDE_BAR_STRATEGIES) {
@@ -341,6 +356,17 @@ export default function TradePage() {
             blkProcessedSignalsRef.current = merged;
           }
         }
+        const daysRaw = localStorage.getItem(BLK_TRADED_ET_DAYS_KEY);
+        if (daysRaw) {
+          const parsed = JSON.parse(daysRaw) as string[];
+          if (Array.isArray(parsed)) {
+            for (const d of parsed) {
+              if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                blkTradedEtDaysRef.current.add(d);
+              }
+            }
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -355,7 +381,7 @@ export default function TradePage() {
     persistBlkProcessedTxids();
   }, [sessionHydrated, persistBlkProcessedTxids]);
 
-  /** Re-register IBIT txids from BLK trade log so server dedupe stays aligned after refresh. */
+  /** Re-register IBIT txids + ET day keys from BLK trade log so server dedupe stays aligned after refresh. */
   useEffect(() => {
     if (!sessionHydrated) return;
     const list = tradesByStrategy[BLK_STRATEGY_ID] ?? [];
@@ -365,6 +391,13 @@ export default function TradePage() {
       if (x && !blkProcessedSignalsRef.current.has(x)) {
         blkProcessedSignalsRef.current.add(x);
         changed = true;
+      }
+      if (t.entryTime != null && t.ibitSignalTxid) {
+        const dk = getEtDayKey(new Date(t.entryTime * 1000));
+        if (!blkTradedEtDaysRef.current.has(dk)) {
+          blkTradedEtDaysRef.current.add(dk);
+          changed = true;
+        }
       }
     }
     if (changed) persistBlkProcessedTxids();
@@ -511,6 +544,7 @@ export default function TradePage() {
         if (snap.status !== 'idle') return;
         const todayKey = getEtDayKey(new Date());
         if (snap.lastSessionEtDayKey != null && snap.lastSessionEtDayKey === todayKey) return;
+        if (blkTradedEtDaysRef.current.has(todayKey)) return;
 
         const res = await fetch('/api/solana-bot/ibit/poll');
         const json = await parseApiJson<{
@@ -542,13 +576,17 @@ export default function TradePage() {
         const price = btcPrice;
         setBlkPaperState((prev) => {
           if (prev.status !== 'idle') return prev;
-          if (prev.lastSessionEtDayKey != null && prev.lastSessionEtDayKey === getEtDayKey(new Date())) {
+          const todayKey = getEtDayKey(new Date());
+          if (prev.lastSessionEtDayKey != null && prev.lastSessionEtDayKey === todayKey) {
             return prev;
           }
+          if (blkTradedEtDaysRef.current.has(todayKey)) return prev;
           for (const sig of signals) {
             if (blkProcessedSignalsRef.current.has(sig.txid)) continue;
             blkProcessedSignalsRef.current.add(sig.txid);
             const t = sig.blockTime > 0 ? sig.blockTime : Math.floor(Date.now() / 1000);
+            const signalDayKey = getEtDayKey(new Date(t * 1000));
+            blkTradedEtDaysRef.current.add(signalDayKey);
             const chainBtc =
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc

@@ -31,13 +31,17 @@ import {
 } from '@/lib/solana-bot/ibit-config';
 import {
   getCoverScheduleUtc,
+  getEtDayKey,
   getEtDayStartUnix,
   getEtMinutesFromMidnight,
   IBIT_TZ,
   isBlockTimeInEtMinuteWindow,
   isWithinSignalWindowEt,
 } from '@/lib/solana-bot/ibit-schedule';
-import { getBlkServerProcessedTxids } from '@/lib/solana-bot/blk-processed-txids-store';
+import {
+  getBlkServerProcessedTxids,
+  getBlkServerTradedEtDayKeys,
+} from '@/lib/solana-bot/blk-processed-txids-store';
 
 export interface IbitTransferSignal {
   txid: string;
@@ -395,7 +399,16 @@ export async function pollIbitTransfers(): Promise<{
 
   /** Do not re-emit txids the server already recorded as processed (survives refresh). */
   const serverSeen = getBlkServerProcessedTxids();
-  const filteredSignals = signals.filter((s) => !serverSeen.has(s.txid.toLowerCase()));
+  /** One BLK session per ET calendar day — multiple morning transfers = different txids. */
+  const tradedEtDays = getBlkServerTradedEtDayKeys();
+  const filteredSignals = signals.filter((s) => {
+    if (serverSeen.has(s.txid.toLowerCase())) return false;
+    if (s.blockTime > 0) {
+      const dk = getEtDayKey(new Date(s.blockTime * 1000));
+      if (tradedEtDays.has(dk)) return false;
+    }
+    return true;
+  });
 
   const byBlock = new Map<number, string[]>();
   for (const s of filteredSignals) {
