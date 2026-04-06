@@ -35,14 +35,50 @@ function sortNewestFirst(items: OHLCVCandle[]): OHLCVCandle[] {
   return [...items].sort((a, b) => b.unixTime - a.unixTime);
 }
 
+/** Birdeye often has **5m** WETH data when **1h** is empty — aggregate to UTC hour bars. */
+function aggregate5mToHourlyUtc(five: OHLCVCandle[], nowSec: number): OHLCVCandle[] {
+  const byHour = new Map<number, OHLCVCandle[]>();
+  for (const c of five) {
+    if (c.unixTime <= 0) continue;
+    const h = Math.floor(c.unixTime / 3600) * 3600;
+    const list = byHour.get(h) ?? [];
+    list.push(c);
+    byHour.set(h, list);
+  }
+  const hours: OHLCVCandle[] = [];
+  for (const [h, group] of Array.from(byHour.entries())) {
+    if (h + 3600 > nowSec) continue;
+    const g = [...group].sort((a, b) => a.unixTime - b.unixTime);
+    if (g.length === 0) continue;
+    hours.push({
+      unixTime: h,
+      open: g[0]!.open,
+      high: Math.max(...g.map((x) => x.high)),
+      low: Math.min(...g.map((x) => x.low)),
+      close: g[g.length - 1]!.close,
+      volume: g.reduce((s, x) => s + x.volume, 0),
+    });
+  }
+  return sortNewestFirst(hours);
+}
+
 async function fetchEthHourlyWithMintFallback(
   timeFrom: number,
   timeTo: number,
   apiKey: string
 ): Promise<OHLCVCandle[]> {
+  const nowSec = timeTo;
   for (const mint of birdeyeEthMintCandidates()) {
     const rows = await fetchHistoricalOHLCVForAddress(mint, timeFrom, timeTo, apiKey, '1h');
     if (rows.length > 0) return rows;
+  }
+  /** Need several days of 5m to synthesize 4+ closed UTC hours. */
+  const wideFrom = Math.min(timeFrom, nowSec - 5 * 86400);
+  for (const mint of birdeyeEthMintCandidates()) {
+    const five = await fetchHistoricalOHLCVForAddress(mint, wideFrom, nowSec, apiKey, '5m');
+    if (five.length === 0) continue;
+    const hourly = aggregate5mToHourlyUtc(five, nowSec);
+    if (hourly.length >= NEED) return hourly;
   }
   return [];
 }
