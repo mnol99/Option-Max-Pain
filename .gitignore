@@ -36,6 +36,6 @@ next-env.d.ts
 # mean-reversion bot logs
 data/*.jsonl
 
-# dev-only persisted inside-bar candle state (see candle-aggregator.ts)
+# dev-only persisted inside-bar + BLK dedupe (see candle-aggregator.ts, blk-processed-txids-store.ts)
 .data/
 

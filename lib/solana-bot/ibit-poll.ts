@@ -37,6 +37,7 @@ import {
   isBlockTimeInEtMinuteWindow,
   isWithinSignalWindowEt,
 } from '@/lib/solana-bot/ibit-schedule';
+import { getBlkServerProcessedTxids } from '@/lib/solana-bot/blk-processed-txids-store';
 
 export interface IbitTransferSignal {
   txid: string;
@@ -392,8 +393,12 @@ export async function pollIbitTransfers(): Promise<{
 
   signals.sort((a, b) => b.blockTime - a.blockTime);
 
+  /** Do not re-emit txids the server already recorded as processed (survives refresh). */
+  const serverSeen = getBlkServerProcessedTxids();
+  const filteredSignals = signals.filter((s) => !serverSeen.has(s.txid.toLowerCase()));
+
   const byBlock = new Map<number, string[]>();
-  for (const s of signals) {
+  for (const s of filteredSignals) {
     if (s.blockTime <= 0) continue;
     const list = byBlock.get(s.blockTime) ?? [];
     list.push(s.txid);
@@ -421,7 +426,7 @@ export async function pollIbitTransfers(): Promise<{
       coinbaseTxLimit,
       signalMaxAgeSec: getIbitSignalMaxAgeSec(),
     },
-    signals,
+    signals: filteredSignals,
     batchGroups,
   };
 }

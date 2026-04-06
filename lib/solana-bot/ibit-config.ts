@@ -187,13 +187,14 @@ export function isArkhamIbitPollEnabled(): boolean {
 
 /**
  * Max age (seconds) of **block time** for a signal to count as "fresh".
- * Prevents re-opening BLK on stale txs from prior days; same-day morning transfers must still
- * qualify if the app polls again after a gap (e.g. laptop sleep). Default **12h** covers a
- * typical Mon–Fri morning window; processed txids are also deduped in localStorage. Set `0` to
- * disable the age check (not recommended). Ignored when `IBIT_ALLOW_HISTORICAL_SIGNALS=1`.
+ * Default **2h** avoids re-triggering the same morning transfer hours later on refresh (when
+ * localStorage is empty or a different origin). For a laptop that sleeps until afternoon, set
+ * **`IBIT_SIGNAL_MAX_AGE_SEC`** higher (e.g. 43200) in `.env.local`. Processed txids are also
+ * deduped in **localStorage** and on the **server** (`.data/blk-processed-txids.json`). Set `0`
+ * to disable the age check (not recommended). Ignored when `IBIT_ALLOW_HISTORICAL_SIGNALS=1`.
  */
 export function getIbitSignalMaxAgeSec(): number {
   const n = Number(process.env.IBIT_SIGNAL_MAX_AGE_SEC);
   if (Number.isFinite(n) && n >= 0) return Math.floor(n);
-  return 43200;
+  return 7200;
 }

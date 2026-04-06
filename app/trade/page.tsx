@@ -174,6 +174,9 @@ export default function TradePage() {
       } catch {
         /* ignore */
       }
+      void fetch('/api/solana-bot/blk/processed-txids', { method: 'DELETE' }).catch(() => {
+        /* ignore */
+      });
     }
     setTradesByStrategy((p) => ({ ...p, [BLK_STRATEGY_ID]: [] }));
     setAuditExpanded(new Set());
@@ -224,6 +227,13 @@ export default function TradePage() {
     } catch {
       /* quota / private mode */
     }
+    void fetch('/api/solana-bot/blk/processed-txids', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ txids: Array.from(blkProcessedSignalsRef.current) }),
+    }).catch(() => {
+      /* server dedupe optional */
+    });
   }, []);
 
   useEffect(() => {
@@ -344,6 +354,21 @@ export default function TradePage() {
     if (!sessionHydrated) return;
     persistBlkProcessedTxids();
   }, [sessionHydrated, persistBlkProcessedTxids]);
+
+  /** Re-register IBIT txids from BLK trade log so server dedupe stays aligned after refresh. */
+  useEffect(() => {
+    if (!sessionHydrated) return;
+    const list = tradesByStrategy[BLK_STRATEGY_ID] ?? [];
+    let changed = false;
+    for (const t of list) {
+      const x = t.ibitSignalTxid;
+      if (x && !blkProcessedSignalsRef.current.has(x)) {
+        blkProcessedSignalsRef.current.add(x);
+        changed = true;
+      }
+    }
+    if (changed) persistBlkProcessedTxids();
+  }, [sessionHydrated, tradesByStrategy, persistBlkProcessedTxids]);
 
   useEffect(() => {
     if (!sessionHydrated || typeof window === 'undefined') return;
