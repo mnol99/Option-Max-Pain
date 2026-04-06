@@ -20,6 +20,11 @@ import {
 } from './candle-intervals';
 import { getNextEtDaily8pmBarStartUnix } from './ibit-schedule';
 import type { InsideBarUnderlying } from './strategy-tabs';
+import {
+  fetchBirdeyeBackfillCompleted,
+  shouldRunBirdeyeBackfill,
+  trimCurrentIfOverlapsBackfill,
+} from '@/lib/solana-bot/candle-birdeye-backfill';
 
 export const INSIDE_BAR_UNDERLYINGS: InsideBarUnderlying[] = ['sol', 'btc', 'eth'];
 
@@ -41,6 +46,9 @@ const completedByKey = new Map<string, OHLCVCandle[]>();
 const currentByKey = new Map<string, CurrentCandle | null>();
 
 let candleDiskLoaded = false;
+
+/** One Birdeye backfill attempt per (underlying × interval) per process if disk is cold. */
+const birdeyeBackfillTried = new Set<string>();
 
 function isCandlePersistenceEnabled(): boolean {
   if (process.env.INSIDE_BAR_DISABLE_CANDLE_PERSIST === '1') return false;
@@ -166,6 +174,26 @@ function rollCandle(
   return next;
 }
 
+async function maybeBirdeyeBackfill(
+  u: InsideBarUnderlying,
+  intervalSec: StrategyIntervalSec,
+  nowSec: number
+): Promise<void> {
+  const k = key(u, intervalSec);
+  if (birdeyeBackfillTried.has(k)) return;
+  const completed = completedByKey.get(k) ?? [];
+  if (!shouldRunBirdeyeBackfill(completed.length, intervalSec)) return;
+
+  const backfilled = await fetchBirdeyeBackfillCompleted(u, intervalSec, nowSec);
+  birdeyeBackfillTried.add(k);
+  if (!backfilled?.length) return;
+
+  completedByKey.set(k, backfilled.slice(0, MAX_COMPLETED));
+  const cur = currentByKey.get(k) ?? null;
+  currentByKey.set(k, trimCurrentIfOverlapsBackfill(cur, backfilled, intervalSec, nowSec));
+  persistCandlesToDisk();
+}
+
 async function fetchUnderlyingPrice(u: InsideBarUnderlying): Promise<number> {
   if (u === 'sol') {
     const { price } = await fetchDovesPrice();
@@ -187,6 +215,12 @@ export async function advanceCandlesOnce(): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     ensureMaps();
     loadCandlesFromDiskOnce();
+
+    for (const u of INSIDE_BAR_UNDERLYINGS) {
+      for (const intervalSec of STRATEGY_INTERVALS) {
+        await maybeBirdeyeBackfill(u, intervalSec, now);
+      }
+    }
 
     for (const u of INSIDE_BAR_UNDERLYINGS) {
       let price: number;
