@@ -1,7 +1,13 @@
 /**
  * Build OHLCV candles from Jupiter Perps (SOL/Doves) + Pyth (BTC, ETH) for multiple bar sizes.
  * Polls once per tick and updates 60m + Daily (ET) per underlying in parallel.
+ *
+ * In **development**, completed + in-progress candles are persisted to disk (see below) so
+ * `next dev` restarts do not wipe warmup (4 completed bars) for 60m/Daily strategies.
  */
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { fetchDovesPrice } from './doves-oracle';
 import { fetchPythBtcPrice, fetchPythEthPrice } from './pyth-price';
@@ -33,6 +39,98 @@ function key(u: InsideBarUnderlying, intervalSec: StrategyIntervalSec): string {
 
 const completedByKey = new Map<string, OHLCVCandle[]>();
 const currentByKey = new Map<string, CurrentCandle | null>();
+
+let candleDiskLoaded = false;
+
+function isCandlePersistenceEnabled(): boolean {
+  if (process.env.INSIDE_BAR_DISABLE_CANDLE_PERSIST === '1') return false;
+  if (process.env.INSIDE_BAR_CANDLES_PERSIST_PATH?.trim()) return true;
+  return process.env.NODE_ENV === 'development';
+}
+
+function getCandlePersistencePath(): string {
+  const raw = process.env.INSIDE_BAR_CANDLES_PERSIST_PATH?.trim();
+  if (raw) return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+  return path.join(process.cwd(), '.data', 'inside-bar-candles.json');
+}
+
+interface CandlePersistPayload {
+  v: 1;
+  savedAt: number;
+  completed: Record<string, OHLCVCandle[]>;
+  current: Record<string, CurrentCandle | null>;
+}
+
+function loadCandlesFromDiskOnce(): void {
+  if (candleDiskLoaded || !isCandlePersistenceEnabled()) return;
+  candleDiskLoaded = true;
+  const file = getCandlePersistencePath();
+  try {
+    if (!fs.existsSync(file)) return;
+    const raw = fs.readFileSync(file, 'utf8');
+    const p = JSON.parse(raw) as CandlePersistPayload;
+    if (p.v !== 1 || !p.completed || !p.current) return;
+    ensureMaps();
+    for (const [k, arr] of Object.entries(p.completed)) {
+      if (!Array.isArray(arr)) continue;
+      if (completedByKey.has(k)) {
+        completedByKey.set(
+          k,
+          arr
+            .filter(
+              (c) =>
+                c &&
+                typeof c.unixTime === 'number' &&
+                typeof c.open === 'number' &&
+                typeof c.close === 'number'
+            )
+            .slice(0, MAX_COMPLETED)
+        );
+      }
+    }
+    for (const [k, cur] of Object.entries(p.current)) {
+      if (!currentByKey.has(k)) continue;
+      if (cur == null) {
+        currentByKey.set(k, null);
+      } else if (
+        typeof cur.unixTime === 'number' &&
+        typeof cur.open === 'number' &&
+        typeof cur.high === 'number' &&
+        typeof cur.low === 'number' &&
+        typeof cur.close === 'number'
+      ) {
+        currentByKey.set(k, { ...cur });
+      }
+    }
+  } catch {
+    /* corrupt or missing */
+  }
+}
+
+function persistCandlesToDisk(): void {
+  if (!isCandlePersistenceEnabled()) return;
+  try {
+    ensureMaps();
+    const file = getCandlePersistencePath();
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const completed: Record<string, OHLCVCandle[]> = {};
+    const current: Record<string, CurrentCandle | null> = {};
+    for (const [k, v] of Array.from(completedByKey.entries())) completed[k] = [...v];
+    for (const [k, v] of Array.from(currentByKey.entries())) current[k] = v ? { ...v } : null;
+    const payload: CandlePersistPayload = {
+      v: 1,
+      savedAt: Date.now(),
+      completed,
+      current,
+    };
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8');
+    fs.renameSync(tmp, file);
+  } catch {
+    /* read-only fs, etc. */
+  }
+}
 
 function ensureMaps(): void {
   for (const u of INSIDE_BAR_UNDERLYINGS) {
@@ -88,6 +186,7 @@ export async function advanceCandlesOnce(): Promise<void> {
   try {
     const now = Math.floor(Date.now() / 1000);
     ensureMaps();
+    loadCandlesFromDiskOnce();
 
     for (const u of INSIDE_BAR_UNDERLYINGS) {
       let price: number;
@@ -122,6 +221,7 @@ export async function advanceCandlesOnce(): Promise<void> {
         }
       }
     }
+    persistCandlesToDisk();
   } catch {
     /* retry next tick */
   }
