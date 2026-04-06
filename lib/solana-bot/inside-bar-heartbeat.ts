@@ -3,14 +3,15 @@
  * Keeps time exits and pattern detection advancing when no browser is connected.
  */
 
-const DEFAULT_MS = 15_000;
+/** Match client `/inside-bar/tick` cadence when unset — 15s was too slow when the tab sleeps. */
+const DEFAULT_MS = 3000;
 
 export function startInsideBarHeartbeat(): void {
   const ms = (() => {
     const raw = process.env.INSIDE_BAR_HEARTBEAT_MS;
     if (raw == null || raw === '') return DEFAULT_MS;
     const n = Number(raw);
-    return Number.isFinite(n) && n >= 5000 ? n : DEFAULT_MS;
+    return Number.isFinite(n) && n >= 1000 ? n : DEFAULT_MS;
   })();
 
   const run = async () => {

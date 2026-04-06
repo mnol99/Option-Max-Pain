@@ -21,7 +21,7 @@ function getConnection(): Connection {
 }
 
 /** Coalesce RPC reads: public RPCs rate-limit repeated getAccountInfo on the same account. */
-const MIN_FETCH_INTERVAL_MS = Number(process.env.DOVES_MIN_FETCH_INTERVAL_MS) || 5000;
+const MIN_FETCH_INTERVAL_MS = Number(process.env.DOVES_MIN_FETCH_INTERVAL_MS) || 3000;
 /** When RPC returns 429, reuse last good price if younger than this (ms). */
 const STALE_OK_MS = Number(process.env.DOVES_STALE_CACHE_MS) || 120000;
 

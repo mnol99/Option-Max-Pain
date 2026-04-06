@@ -51,7 +51,13 @@ import {
 const PRICE_POLL_MS = 1000;   // When pattern detected or in position
 const OHLCV_POLL_MS = 60000;  // Check for new candles every minute
 const PRICE_POLL_IDLE_MS = 10000; // When idle, poll less often
-const INSIDE_BAR_SERVER_SYNC_MS = 3000;
+const INSIDE_BAR_SERVER_SYNC_MS = (() => {
+  if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_INSIDE_BAR_SYNC_MS) {
+    const n = Number(process.env.NEXT_PUBLIC_INSIDE_BAR_SYNC_MS);
+    if (Number.isFinite(n) && n >= 500) return n;
+  }
+  return 2000;
+})();
 
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
