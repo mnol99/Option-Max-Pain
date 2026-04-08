@@ -13,9 +13,13 @@ export const BLK_DEFAULT_NOTIONAL_USD = 1000;
 export const BLK_COVER_SLICES = 18;
 
 export interface BlkPaperState {
-  status: 'idle' | 'short_open';
-  /** ET day (YYYY-MM-DD) of the current/last session — blocks a second signal the same ET day */
-  lastSessionEtDayKey: string | null;
+  status: 'idle' | 'short_open' | 'long_open';
+  /** Set when status is short_open or long_open */
+  positionSide?: 'short' | 'long';
+  /** Last ET day we opened a short (blocks duplicate short same day) */
+  lastShortEtDayKey: string | null;
+  /** Last ET day we opened a long (blocks duplicate long same day) */
+  lastLongEtDayKey: string | null;
   /** BTC price at entry (Pyth, when signal processed) */
   entryBtc: number | null;
   entryTime: number | null;
@@ -55,12 +59,16 @@ export interface BlkPaperState {
   cumulativePnlUsd: number;
 }
 
-export function createBlkInitialState(overrides?: Partial<Pick<BlkPaperState, 'lastSessionEtDayKey'>>): BlkPaperState {
+export function createBlkInitialState(
+  overrides?: Partial<Pick<BlkPaperState, 'lastShortEtDayKey' | 'lastLongEtDayKey'>>
+): BlkPaperState {
   const lev = 1.5;
   const col = BLK_DEFAULT_NOTIONAL_USD;
   return {
     status: 'idle',
-    lastSessionEtDayKey: overrides?.lastSessionEtDayKey ?? null,
+    positionSide: undefined,
+    lastShortEtDayKey: overrides?.lastShortEtDayKey ?? null,
+    lastLongEtDayKey: overrides?.lastLongEtDayKey ?? null,
     entryBtc: null,
     entryTime: null,
     collateralUsd: col,
@@ -96,7 +104,8 @@ export function createBlkShortOpenState(
     watchListMatch: boolean;
     signalSource: string;
     arkhamEntityBase?: string;
-  }
+  },
+  preserveLongEtDayKey?: string | null
 ): BlkPaperState {
   const anchor = new Date(signalTimeSec * 1000);
   const notionalUsd = collateralUsd * leverage;
@@ -106,7 +115,9 @@ export function createBlkShortOpenState(
   const paperShortBtc = notionalUsd / btcPrice;
   return {
     status: 'short_open',
-    lastSessionEtDayKey: dayKey,
+    positionSide: 'short',
+    lastShortEtDayKey: dayKey,
+    lastLongEtDayKey: preserveLongEtDayKey ?? null,
     entryBtc: btcPrice,
     entryTime: signalTimeSec,
     collateralUsd,
@@ -114,6 +125,58 @@ export function createBlkShortOpenState(
     notionalUsd,
     chainMainOutBtc,
     paperShortBtc,
+    coverSliceCount,
+    sessionId: newTradeId(),
+    sessionOpenEmitted: false,
+    coverScheduleUtc,
+    nextSliceIndex: 0,
+    signalTxid,
+    ibitInputSourceAddresses: ibitMeta?.inputSourceAddresses ?? [],
+    ibitPrimarySourceAddress: ibitMeta?.primarySourceAddress ?? null,
+    ibitWatchListMatch: ibitMeta?.watchListMatch ?? false,
+    ibitSignalSource: ibitMeta?.signalSource ?? null,
+    ibitArkhamEntityBase:
+      ibitMeta?.signalSource === 'arkham' && ibitMeta?.arkhamEntityBase
+        ? ibitMeta.arkhamEntityBase
+        : null,
+    cumulativePnlUsd: 0,
+  };
+}
+
+export function createBlkLongOpenState(
+  btcPrice: number,
+  signalTimeSec: number,
+  signalTxid: string,
+  collateralUsd: number,
+  leverage: number,
+  chainMainOutBtc: number,
+  ibitMeta?: {
+    inputSourceAddresses: string[];
+    primarySourceAddress: string | null;
+    watchListMatch: boolean;
+    signalSource: string;
+    arkhamEntityBase?: string;
+  },
+  preserveShortEtDayKey?: string | null
+): BlkPaperState {
+  const anchor = new Date(signalTimeSec * 1000);
+  const notionalUsd = collateralUsd * leverage;
+  const dayKey = getEtDayKey(anchor);
+  const coverScheduleUtc = getBlkCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const coverSliceCount = coverScheduleUtc.length;
+  const paperLongBtc = notionalUsd / btcPrice;
+  return {
+    status: 'long_open',
+    positionSide: 'long',
+    lastLongEtDayKey: dayKey,
+    lastShortEtDayKey: preserveShortEtDayKey ?? null,
+    entryBtc: btcPrice,
+    entryTime: signalTimeSec,
+    collateralUsd,
+    leverage,
+    notionalUsd,
+    chainMainOutBtc,
+    paperShortBtc: paperLongBtc,
     coverSliceCount,
     sessionId: newTradeId(),
     sessionOpenEmitted: false,
@@ -141,9 +204,10 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
   const entry = prev.entryBtc!;
   const t = prev.entryTime!;
   const id = prev.sessionId!;
+  const side = prev.positionSide === 'long' ? 'long' : 'short';
   return {
     id: newTradeId(),
-    side: 'short',
+    side,
     entryPrice: entry,
     entryTime: t,
     exitPrice: entry,
@@ -179,10 +243,15 @@ export function processBlkPaperTick(
   btcPrice: number,
   nowSec: number
 ): BlkProcessResult {
-  if (prev.status !== 'short_open' || prev.entryBtc == null || prev.entryTime == null) {
+  if (
+    (prev.status !== 'short_open' && prev.status !== 'long_open') ||
+    prev.entryBtc == null ||
+    prev.entryTime == null
+  ) {
     return { state: prev, closedTrades: [] };
   }
 
+  const isLong = prev.status === 'long_open' || prev.positionSide === 'long';
   const entry = prev.entryBtc;
   const n = Math.max(1, prev.coverSliceCount || prev.coverScheduleUtc.length);
   const sliceBtc = prev.paperShortBtc / n;
@@ -211,7 +280,7 @@ export function processBlkPaperTick(
     return { state: next, closedTrades: [] };
   }
 
-  const legPnlUsd = (entry - btcPrice) * sliceBtc;
+  const legPnlUsd = isLong ? (btcPrice - entry) * sliceBtc : (entry - btcPrice) * sliceBtc;
   cumulative += legPnlUsd;
   const pnlPercent = sliceUsd > 0 ? (legPnlUsd / sliceUsd) * 100 : 0;
   const idx = next.nextSliceIndex;
@@ -222,7 +291,7 @@ export function processBlkPaperTick(
 
   closedTrades.push({
     id: newTradeId(),
-    side: 'short',
+    side: isLong ? 'long' : 'short',
     entryPrice: entry,
     entryTime: next.entryTime!,
     exitPrice: btcPrice,
@@ -251,7 +320,10 @@ export function processBlkPaperTick(
 
   if (next.nextSliceIndex >= n) {
     return {
-      state: createBlkInitialState({ lastSessionEtDayKey: prev.lastSessionEtDayKey }),
+      state: createBlkInitialState({
+        lastShortEtDayKey: prev.lastShortEtDayKey,
+        lastLongEtDayKey: prev.lastLongEtDayKey,
+      }),
       closedTrades,
     };
   }

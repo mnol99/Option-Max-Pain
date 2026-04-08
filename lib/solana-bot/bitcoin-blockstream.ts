@@ -71,6 +71,17 @@ export function sumToAddress(tx: BlockstreamTxRef, address: string): number {
   return sats;
 }
 
+/** Total sats received at `address` when it appears as a spend input prevout (incoming to custodian). */
+export function sumFromAddressAsInput(tx: BlockstreamTxRef, address: string): number {
+  let sats = 0;
+  for (const v of tx.vin || []) {
+    if (v.prevout?.scriptpubkey_address === address) {
+      sats += Math.round(v.prevout?.value ?? 0);
+    }
+  }
+  return sats;
+}
+
 /** Distinct addresses appearing as spend inputs (prevouts). */
 export function collectInputSourceAddresses(tx: BlockstreamTxRef): string[] {
   const set = new Set<string>();

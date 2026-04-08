@@ -185,6 +185,43 @@ export function isArkhamIbitPollEnabled(): boolean {
   return process.env.ARKHAM_DISABLE_IBIT_POLL !== '1';
 }
 
+/** When `1`, BLK signals come only from Arkham batch counting (2nd ~300 BTC out → short, 2nd ~300 BTC in → long). */
+export function isArkhamBatchModeEnabled(): boolean {
+  return process.env.ARKHAM_BATCH_MODE === '1';
+}
+
+/** Target batch size (BTC) for Arkham batch mode (default 300). */
+export function getArkhamBatchTargetBtc(): number {
+  const n = Number(process.env.ARKHAM_BATCH_TARGET_BTC);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 300;
+}
+
+/** Half-band around target (default 50 → 250–350 BTC). */
+export function getArkhamBatchToleranceBtc(): number {
+  const n = Number(process.env.ARKHAM_BATCH_TOLERANCE_BTC);
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 50;
+}
+
+/** Arkham `counterparties` slug (default coinbase). */
+export function getArkhamCounterpartySlug(): string {
+  const e = process.env.ARKHAM_COUNTERPARTY?.trim();
+  return e || 'coinbase';
+}
+
+/** ET minute-of-day (inclusive) for 2nd **in** long signal (default 9:30 → 570). */
+export function getArkhamLongAfterMinEt(): number {
+  const n = Number(process.env.ARKHAM_LONG_AFTER_MIN_ET);
+  if (Number.isFinite(n) && n >= 0 && n < 24 * 60) return Math.floor(n);
+  return 9 * 60 + 30;
+}
+
+/** Skip Blockstream Coinbase deposit / legacy watch polls when `1` (use with batch mode). */
+export function isIbitCoinbasePollEnabled(): boolean {
+  return process.env.IBIT_DISABLE_COINBASE_POLL !== '1';
+}
+
 /**
  * Max age (seconds) of **block time** for a signal to count as "fresh".
  * Default **2h** avoids re-triggering the same morning transfer hours later on refresh (when

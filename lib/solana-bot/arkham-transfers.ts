@@ -29,11 +29,15 @@ export interface ArkhamBitcoinOutParams {
   limit: number;
   /** e.g. 7d, 24h — Arkham `timeLast` */
   timeLast: string;
+  /** `out` = from base, `in` = to base (see Arkham GET /transfers). */
+  flow?: 'in' | 'out';
+  /** Optional counterparty entity slug (e.g. coinbase) — restricts to base ↔ counterparty. */
+  counterparties?: string;
 }
 
 /**
- * Outgoing Bitcoin transfers involving `base` (typically IBIT custodian entity on Arkham).
- * Rate limit: 1 req/s on /transfers — call at most once per poll tick.
+ * Bitcoin transfers for `base` + optional `flow` / `counterparties`.
+ * Rate limit: 1 req/s on /transfers — space sequential calls by ≥1s.
  */
 export async function fetchArkhamBitcoinTransfersForBase(
   params: ArkhamBitcoinOutParams
@@ -41,9 +45,12 @@ export async function fetchArkhamBitcoinTransfersForBase(
   const q = new URLSearchParams();
   q.set('base', params.transferBase);
   q.set('chains', 'bitcoin');
-  q.set('flow', 'out');
+  q.set('flow', params.flow ?? 'out');
+  if (params.counterparties?.trim()) {
+    q.set('counterparties', params.counterparties.trim());
+  }
   q.set('sortKey', 'time');
-  q.set('sortDir', 'desc');
+  q.set('sortDir', 'asc');
   q.set('limit', String(Math.min(100, Math.max(1, params.limit))));
   q.set('timeLast', params.timeLast);
 

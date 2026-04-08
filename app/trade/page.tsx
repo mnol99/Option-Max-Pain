@@ -35,6 +35,7 @@ import {
   BLK_COVER_SLICES,
   BLK_DEFAULT_NOTIONAL_USD,
   createBlkInitialState,
+  createBlkLongOpenState,
   createBlkShortOpenState,
   processBlkPaperTick,
   type BlkPaperState,
@@ -63,8 +64,9 @@ const INSIDE_BAR_SERVER_SYNC_MS = (() => {
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 /** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
 const BLK_PROCESSED_TXIDS_KEY = 'solana-bot-blk-processed-txids-v1';
-/** ET calendar days (YYYY-MM-DD) that already had a BLK session — blocks 2nd tx same morning */
-const BLK_TRADED_ET_DAYS_KEY = 'solana-bot-blk-traded-et-days-v1';
+/** ET days that already opened a BLK short / long (separate keys for same-day short + long) */
+const BLK_TRADED_SHORT_DAYS_KEY = 'solana-bot-blk-traded-short-et-days-v1';
+const BLK_TRADED_LONG_DAYS_KEY = 'solana-bot-blk-traded-long-et-days-v1';
 const MAX_BLK_TXID_CACHE = 500;
 
 function formatTime(ts: number): string {
@@ -170,18 +172,21 @@ export default function TradePage() {
   const blkPaperStateRef = useRef(blkPaperState);
   blkPaperStateRef.current = blkPaperState;
   const blkProcessedSignalsRef = useRef<Set<string>>(new Set());
-  const blkTradedEtDaysRef = useRef<Set<string>>(new Set());
+  const blkTradedShortEtDaysRef = useRef<Set<string>>(new Set());
+  const blkTradedLongEtDaysRef = useRef<Set<string>>(new Set());
 
   const clearBlkPaperHistory = useCallback(() => {
     const fresh = createBlkInitialState();
     blkPaperStateRef.current = fresh;
     setBlkPaperState(fresh);
     blkProcessedSignalsRef.current = new Set();
-    blkTradedEtDaysRef.current = new Set();
+    blkTradedShortEtDaysRef.current = new Set();
+    blkTradedLongEtDaysRef.current = new Set();
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(BLK_PROCESSED_TXIDS_KEY);
-        localStorage.removeItem(BLK_TRADED_ET_DAYS_KEY);
+        localStorage.removeItem(BLK_TRADED_SHORT_DAYS_KEY);
+        localStorage.removeItem(BLK_TRADED_LONG_DAYS_KEY);
       } catch {
         /* ignore */
       }
@@ -236,8 +241,12 @@ export default function TradePage() {
       const arr = Array.from(blkProcessedSignalsRef.current).slice(-MAX_BLK_TXID_CACHE);
       localStorage.setItem(BLK_PROCESSED_TXIDS_KEY, JSON.stringify(arr));
       localStorage.setItem(
-        BLK_TRADED_ET_DAYS_KEY,
-        JSON.stringify(Array.from(blkTradedEtDaysRef.current))
+        BLK_TRADED_SHORT_DAYS_KEY,
+        JSON.stringify(Array.from(blkTradedShortEtDaysRef.current))
+      );
+      localStorage.setItem(
+        BLK_TRADED_LONG_DAYS_KEY,
+        JSON.stringify(Array.from(blkTradedLongEtDaysRef.current))
       );
     } catch {
       /* quota / private mode */
@@ -247,7 +256,8 @@ export default function TradePage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         txids: Array.from(blkProcessedSignalsRef.current),
-        tradedEtDayKeys: Array.from(blkTradedEtDaysRef.current),
+        tradedShortEtDayKeys: Array.from(blkTradedShortEtDaysRef.current),
+        tradedLongEtDayKeys: Array.from(blkTradedLongEtDaysRef.current),
       }),
     }).catch(() => {
       /* server dedupe optional */
@@ -275,6 +285,8 @@ export default function TradePage() {
         useChartPrice?: boolean;
         liveMode?: boolean;
         blkPaperState?: BlkPaperState;
+        /** Legacy v6: long session was split into a second object — merged into blkPaperState on load */
+        blkLongPaperState?: BlkPaperState;
         blkProcessedSignals?: string[];
       };
       if (p.activeStrategyId && TRADE_STRATEGIES.some((s) => s.id === p.activeStrategyId)) {
@@ -301,6 +313,8 @@ export default function TradePage() {
         if (p.blkPaperState) {
         const bs = p.blkPaperState as BlkPaperState & {
           lastSessionEtDayKey?: string | null;
+          lastShortEtDayKey?: string | null;
+          lastLongEtDayKey?: string | null;
           ibitInputSourceAddresses?: string[];
           ibitPrimarySourceAddress?: string | null;
           ibitWatchListMatch?: boolean;
@@ -310,13 +324,26 @@ export default function TradePage() {
         if (bs.coverSliceCount == null && bs.coverScheduleUtc?.length) {
           bs.coverSliceCount = bs.coverScheduleUtc.length;
         }
-        if (bs.lastSessionEtDayKey === undefined) bs.lastSessionEtDayKey = null;
+        const legacyDay = bs.lastSessionEtDayKey;
+        if (bs.lastShortEtDayKey === undefined) bs.lastShortEtDayKey = null;
+        if (bs.lastLongEtDayKey === undefined) bs.lastLongEtDayKey = null;
+        if (legacyDay && !bs.lastShortEtDayKey && !bs.lastLongEtDayKey) {
+          if (bs.status === 'short_open') bs.lastShortEtDayKey = legacyDay;
+          if (bs.status === 'long_open') bs.lastLongEtDayKey = legacyDay;
+        }
         if (
           bs.status === 'short_open' &&
-          bs.lastSessionEtDayKey == null &&
+          bs.lastShortEtDayKey == null &&
           bs.entryTime != null
         ) {
-          bs.lastSessionEtDayKey = getEtDayKey(new Date(bs.entryTime * 1000));
+          bs.lastShortEtDayKey = getEtDayKey(new Date(bs.entryTime * 1000));
+        }
+        if (
+          bs.status === 'long_open' &&
+          bs.lastLongEtDayKey == null &&
+          bs.entryTime != null
+        ) {
+          bs.lastLongEtDayKey = getEtDayKey(new Date(bs.entryTime * 1000));
         }
         const levHydr = p.leverage ?? 1.5;
         const colHydr = p.paperPositionSizeUsd ?? 1000;
@@ -326,8 +353,7 @@ export default function TradePage() {
         if (bs.ibitSignalSource === undefined) bs.ibitSignalSource = null;
         if (bs.ibitArkhamEntityBase === undefined) bs.ibitArkhamEntityBase = null;
         if (bs.collateralUsd == null || bs.leverage == null) {
-          if (bs.status === 'short_open') {
-            // Legacy: notionalUsd was full USD short size at 1× (no separate collateral/leverage)
+          if (bs.status === 'short_open' || bs.status === 'long_open') {
             bs.leverage = bs.leverage ?? 1;
             bs.collateralUsd = bs.notionalUsd ?? colHydr;
             bs.notionalUsd = bs.collateralUsd * bs.leverage;
@@ -338,8 +364,41 @@ export default function TradePage() {
           }
         }
         setBlkPaperState(bs as BlkPaperState);
-        if (bs.lastSessionEtDayKey) {
-          blkTradedEtDaysRef.current.add(bs.lastSessionEtDayKey);
+        if (bs.lastShortEtDayKey) blkTradedShortEtDaysRef.current.add(bs.lastShortEtDayKey);
+        if (bs.lastLongEtDayKey) blkTradedLongEtDaysRef.current.add(bs.lastLongEtDayKey);
+      }
+      if (p.blkLongPaperState) {
+        const bl = p.blkLongPaperState as BlkPaperState & {
+          lastSessionEtDayKey?: string | null;
+        };
+        if (bl.coverSliceCount == null && bl.coverScheduleUtc?.length) {
+          bl.coverSliceCount = bl.coverScheduleUtc.length;
+        }
+        if (bl.lastShortEtDayKey === undefined) bl.lastShortEtDayKey = null;
+        if (bl.lastLongEtDayKey === undefined) bl.lastLongEtDayKey = null;
+        const leg = bl.lastSessionEtDayKey;
+        if (leg && !bl.lastShortEtDayKey && !bl.lastLongEtDayKey) {
+          if (bl.status === 'short_open') bl.lastShortEtDayKey = leg;
+          if (bl.status === 'long_open') bl.lastLongEtDayKey = leg;
+        }
+        if (
+          bl.status === 'short_open' &&
+          bl.lastShortEtDayKey == null &&
+          bl.entryTime != null
+        ) {
+          bl.lastShortEtDayKey = getEtDayKey(new Date(bl.entryTime * 1000));
+        }
+        if (bl.status === 'long_open' && bl.lastLongEtDayKey == null && bl.entryTime != null) {
+          bl.lastLongEtDayKey = getEtDayKey(new Date(bl.entryTime * 1000));
+        }
+        const shortOk = bl.status === 'short_open' || bl.status === 'long_open';
+        const prevHydr = p.blkPaperState as BlkPaperState | undefined;
+        const prevIdle = !prevHydr || prevHydr.status === 'idle';
+        if (shortOk && prevIdle) {
+          setBlkPaperState(bl as BlkPaperState);
+          blkPaperStateRef.current = bl as BlkPaperState;
+          if (bl.lastShortEtDayKey) blkTradedShortEtDaysRef.current.add(bl.lastShortEtDayKey);
+          if (bl.lastLongEtDayKey) blkTradedLongEtDaysRef.current.add(bl.lastLongEtDayKey);
         }
       }
       if (p.entering) {
@@ -362,15 +421,40 @@ export default function TradePage() {
             blkProcessedSignalsRef.current = merged;
           }
         }
-        const daysRaw = localStorage.getItem(BLK_TRADED_ET_DAYS_KEY);
-        if (daysRaw) {
-          const parsed = JSON.parse(daysRaw) as string[];
+        const shortDaysRaw = localStorage.getItem(BLK_TRADED_SHORT_DAYS_KEY);
+        if (shortDaysRaw) {
+          const parsed = JSON.parse(shortDaysRaw) as string[];
           if (Array.isArray(parsed)) {
             for (const d of parsed) {
               if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
-                blkTradedEtDaysRef.current.add(d);
+                blkTradedShortEtDaysRef.current.add(d);
               }
             }
+          }
+        }
+        const longDaysRaw = localStorage.getItem(BLK_TRADED_LONG_DAYS_KEY);
+        if (longDaysRaw) {
+          const parsed = JSON.parse(longDaysRaw) as string[];
+          if (Array.isArray(parsed)) {
+            for (const d of parsed) {
+              if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                blkTradedLongEtDaysRef.current.add(d);
+              }
+            }
+          }
+        }
+        const legacyDays = localStorage.getItem('solana-bot-blk-traded-et-days-v1');
+        if (legacyDays) {
+          try {
+            const parsed = JSON.parse(legacyDays) as string[];
+            for (const d of parsed) {
+              if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                blkTradedShortEtDaysRef.current.add(d);
+                blkTradedLongEtDaysRef.current.add(d);
+              }
+            }
+          } catch {
+            /* ignore */
           }
         }
       } catch {
@@ -400,9 +484,16 @@ export default function TradePage() {
       }
       if (t.entryTime != null && t.ibitSignalTxid) {
         const dk = getEtDayKey(new Date(t.entryTime * 1000));
-        if (!blkTradedEtDaysRef.current.has(dk)) {
-          blkTradedEtDaysRef.current.add(dk);
-          changed = true;
+        if (t.side === 'long') {
+          if (!blkTradedLongEtDaysRef.current.has(dk)) {
+            blkTradedLongEtDaysRef.current.add(dk);
+            changed = true;
+          }
+        } else {
+          if (!blkTradedShortEtDaysRef.current.has(dk)) {
+            blkTradedShortEtDaysRef.current.add(dk);
+            changed = true;
+          }
         }
       }
     }
@@ -540,7 +631,7 @@ export default function TradePage() {
     return () => clearInterval(id);
   }, [fetchBtcPrice]);
 
-  /** IBIT poll → paper short (allocation × leverage) when signal; no poll while short open or after one session per ET day. */
+  /** IBIT poll → paper short/long (allocation × leverage) when signal; no poll while a BLK session is open. */
   useEffect(() => {
     if (liveMode || btcPrice == null || btcPrice <= 0) return;
     let cancelled = false;
@@ -548,9 +639,6 @@ export default function TradePage() {
       try {
         const snap = blkPaperStateRef.current;
         if (snap.status !== 'idle') return;
-        const todayKey = getEtDayKey(new Date());
-        if (snap.lastSessionEtDayKey != null && snap.lastSessionEtDayKey === todayKey) return;
-        if (blkTradedEtDaysRef.current.has(todayKey)) return;
 
         const res = await fetch('/api/solana-bot/ibit/poll');
         const json = await parseApiJson<{
@@ -565,6 +653,7 @@ export default function TradePage() {
               watchListMatch?: boolean;
               signalSource?: string;
               arkhamEntityBase?: string;
+              blkArkhamBatchRole?: 'second_out_short' | 'second_in_long';
             }>;
           };
         }>(res);
@@ -578,45 +667,68 @@ export default function TradePage() {
           watchListMatch?: boolean;
           signalSource?: string;
           arkhamEntityBase?: string;
+          blkArkhamBatchRole?: 'second_out_short' | 'second_in_long';
         }>;
         const price = btcPrice;
         setBlkPaperState((prev) => {
           if (prev.status !== 'idle') return prev;
-          const todayKey = getEtDayKey(new Date());
-          if (prev.lastSessionEtDayKey != null && prev.lastSessionEtDayKey === todayKey) {
-            return prev;
-          }
-          if (blkTradedEtDaysRef.current.has(todayKey)) return prev;
           for (const sig of signals) {
             if (blkProcessedSignalsRef.current.has(sig.txid)) continue;
-            blkProcessedSignalsRef.current.add(sig.txid);
             const t = sig.blockTime > 0 ? sig.blockTime : Math.floor(Date.now() / 1000);
             const signalDayKey = getEtDayKey(new Date(t * 1000));
-            blkTradedEtDaysRef.current.add(signalDayKey);
+            const role = sig.blkArkhamBatchRole;
+            const isLongSignal = role === 'second_in_long';
+            const isShortSignal = role === 'second_out_short' || role == null;
+            if (isLongSignal) {
+              if (blkTradedLongEtDaysRef.current.has(signalDayKey)) continue;
+            } else if (isShortSignal) {
+              if (blkTradedShortEtDaysRef.current.has(signalDayKey)) continue;
+            } else {
+              continue;
+            }
+            blkProcessedSignalsRef.current.add(sig.txid);
+            if (isLongSignal) {
+              blkTradedLongEtDaysRef.current.add(signalDayKey);
+            } else {
+              blkTradedShortEtDaysRef.current.add(signalDayKey);
+            }
             const chainBtc =
               typeof sig.mainOutBtc === 'number' && sig.mainOutBtc > 0
                 ? sig.mainOutBtc
                 : prev.collateralUsd / price;
             const inputs = sig.inputSourceAddresses ?? [];
             const primary = sig.sourceAddress ?? inputs[0] ?? null;
-            const next = createBlkShortOpenState(
-              price,
-              t,
-              sig.txid,
-              prev.collateralUsd,
-              prev.leverage,
-              chainBtc,
-              {
-                inputSourceAddresses: inputs,
-                primarySourceAddress: primary,
-                watchListMatch: sig.watchListMatch ?? false,
-                signalSource:
-                  sig.signalSource === 'arkham'
-                    ? 'arkham'
-                    : (sig.signalSource ?? 'coinbase_deposit'),
-                arkhamEntityBase: sig.arkhamEntityBase,
-              }
-            );
+            const meta = {
+              inputSourceAddresses: inputs,
+              primarySourceAddress: primary,
+              watchListMatch: sig.watchListMatch ?? false,
+              signalSource:
+                sig.signalSource === 'arkham'
+                  ? 'arkham'
+                  : (sig.signalSource ?? 'coinbase_deposit'),
+              arkhamEntityBase: sig.arkhamEntityBase,
+            };
+            const next = isLongSignal
+              ? createBlkLongOpenState(
+                  price,
+                  t,
+                  sig.txid,
+                  prev.collateralUsd,
+                  prev.leverage,
+                  chainBtc,
+                  meta,
+                  prev.lastShortEtDayKey
+                )
+              : createBlkShortOpenState(
+                  price,
+                  t,
+                  sig.txid,
+                  prev.collateralUsd,
+                  prev.leverage,
+                  chainBtc,
+                  meta,
+                  prev.lastLongEtDayKey
+                );
             queueMicrotask(() => persistBlkProcessedTxids());
             return next;
           }
@@ -1314,13 +1426,27 @@ export default function TradePage() {
                         blkPaperState.status === 'idle' ? 'bg-gray-100' : 'bg-primary-100 text-primary-800'
                       }`}
                     >
-                      {blkPaperState.status === 'idle' &&
-                      blkPaperState.lastSessionEtDayKey != null &&
-                      blkPaperState.lastSessionEtDayKey === getEtDayKey(new Date())
-                        ? 'idle (covered today — no IBIT poll until next ET day)'
-                        : blkPaperState.status === 'idle'
-                          ? 'idle (watching IBIT)'
-                          : 'short open (covering)'}
+                      {(() => {
+                        const todayK = getEtDayKey(new Date());
+                        const shortToday =
+                          blkPaperState.lastShortEtDayKey != null &&
+                          blkPaperState.lastShortEtDayKey === todayK;
+                        const longToday =
+                          blkPaperState.lastLongEtDayKey != null &&
+                          blkPaperState.lastLongEtDayKey === todayK;
+                        if (blkPaperState.status === 'idle' && shortToday && longToday) {
+                          return 'idle (short & long done today — no new BLK session until next ET day)';
+                        }
+                        if (blkPaperState.status === 'idle' && shortToday && !longToday) {
+                          return 'idle (short done today — long may still signal)';
+                        }
+                        if (blkPaperState.status === 'idle' && longToday && !shortToday) {
+                          return 'idle (long done today — short may still signal)';
+                        }
+                        if (blkPaperState.status === 'idle') return 'idle (watching IBIT)';
+                        if (blkPaperState.status === 'long_open') return 'long open (scaling out)';
+                        return 'short open (covering)';
+                      })()}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -1329,14 +1455,19 @@ export default function TradePage() {
                       {btcPrice != null ? `$${formatPrice(btcPrice)}` : '—'}
                     </span>
                   </div>
-                  {blkPaperState.status === 'short_open' && blkPaperState.entryBtc != null && (
+                  {(blkPaperState.status === 'short_open' || blkPaperState.status === 'long_open') &&
+                    blkPaperState.entryBtc != null && (
                     <>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Short entry</span>
+                        <span className="text-gray-600">
+                          {blkPaperState.status === 'long_open' ? 'Long entry' : 'Short entry'}
+                        </span>
                         <span className="font-mono">${formatPrice(blkPaperState.entryBtc)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Paper short (sim)</span>
+                        <span className="text-gray-600">
+                          {blkPaperState.status === 'long_open' ? 'Paper long (sim)' : 'Paper short (sim)'}
+                        </span>
                         <span className="font-mono">
                           {blkPaperState.paperShortBtc.toFixed(6)} BTC (~$
                           {blkPaperState.notionalUsd.toFixed(0)} notional = ${blkPaperState.collateralUsd.toFixed(0)}{' '}
@@ -1344,7 +1475,7 @@ export default function TradePage() {
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-600">On-chain to CB (signal)</span>
+                        <span className="text-gray-600">On-chain (signal, audit)</span>
                         <span className="font-mono">
                           {blkPaperState.chainMainOutBtc.toFixed(4)} BTC
                         </span>

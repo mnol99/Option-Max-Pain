@@ -40,42 +40,17 @@ import {
 } from '@/lib/solana-bot/ibit-schedule';
 import {
   getBlkServerProcessedTxids,
-  getBlkServerTradedEtDayKeys,
+  getBlkServerTradedLongEtDayKeys,
+  getBlkServerTradedShortEtDayKeys,
 } from '@/lib/solana-bot/blk-processed-txids-store';
+import type { IbitBatchGroup, IbitTransferSignal } from '@/lib/solana-bot/ibit-types';
+import { processArkhamBatchSignals } from '@/lib/solana-bot/ibit-arkham-batch';
+import {
+  isArkhamBatchModeEnabled,
+  isIbitCoinbasePollEnabled,
+} from '@/lib/solana-bot/ibit-config';
 
-export interface IbitTransferSignal {
-  txid: string;
-  /** Unix seconds (block time, or 0 if unknown) */
-  blockTime: number;
-  /**
-   * Primary sender heuristic: address of the largest-value input prevout (feeder UTXO).
-   * Use `inputSourceAddresses` for the full set.
-   */
-  sourceAddress: string;
-  /** Distinct addresses that spent into this tx (prevouts) — pattern analysis / audit */
-  inputSourceAddresses: string[];
-  /** Any input address appears in the optional legacy custodian watch list */
-  watchListMatch: boolean;
-  /** coinbase_deposit | source_watch | extra_txid | arkham (Arkham GET /transfers → Blockstream validate) */
-  signalSource: 'coinbase_deposit' | 'source_watch' | 'extra_txid' | 'arkham';
-  /** When signalSource is arkham: `base` entity used in the API query */
-  arkhamEntityBase?: string;
-  /** Total sats to any watched Coinbase destination */
-  sats: number;
-  /** Sats to main Prime deposit address (large leg) */
-  mainOutSats: number;
-  /** mainOutSats / 1e8 */
-  mainOutBtc: number;
-  matchedDestinations: string[];
-  coverScheduleUtc: string[];
-  /** strict = time + main-output band; legacy = 02:00–09:30 ET */
-  detectionMode: 'strict' | 'legacy';
-}
-
-export interface IbitBatchGroup {
-  blockTime: number;
-  txids: string[];
-}
+export type { IbitTransferSignal, IbitBatchGroup } from '@/lib/solana-bot/ibit-types';
 
 /**
  * Require tx block time to fall on **today's** ET calendar day so a 06:53 ET transfer from
@@ -295,9 +270,22 @@ export async function pollIbitTransfers(): Promise<{
     timeLast: getArkhamTimeLast(),
   };
 
-  /** 1b) Arkham Intel API — entity `base` outgoing BTC, then validate full tx on Blockstream */
   const arkhamKey = getArkhamApiKey();
-  if (isArkhamIbitPollEnabled() && arkhamKey) {
+
+  /** 1b) Arkham: batch mode (2nd ~300 BTC) or legacy per-tx validation */
+  if (isArkhamBatchModeEnabled() && arkhamKey && isArkhamIbitPollEnabled()) {
+    arkhamMeta.configured = true;
+    arkhamMeta.transferBase = getArkhamTransferBase();
+    arkhamMeta.timeLast = getArkhamTimeLast();
+    const batch = await processArkhamBatchSignals();
+    if (batch.error) arkhamMeta.error = batch.error;
+    for (const s of batch.signals) {
+      if (!seen.has(s.txid)) {
+        seen.add(s.txid);
+        signals.push(s);
+      }
+    }
+  } else if (isArkhamIbitPollEnabled() && arkhamKey) {
     arkhamMeta.configured = true;
     const transferBase = getArkhamTransferBase();
     arkhamMeta.transferBase = transferBase;
@@ -323,38 +311,40 @@ export async function pollIbitTransfers(): Promise<{
     }
   }
 
-  /** 2) Coinbase deposit addresses first — large BTC in to main deposit → signal (sender = inputs) */
-  for (const addr of coinbaseAddresses) {
-    let txs: BlockstreamTxRef[];
-    try {
-      txs = await fetchAddressTxs(addr, coinbaseTxLimit);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return {
-        configured: true,
-        watchAddresses,
-        coinbaseAddresses,
-        inLegacySignalWindow: isWithinSignalWindowEt(),
-        inDetectWindow: nowInActiveDetectWindow(),
-        pollSourceWatchAddresses: pollWatch,
-        detection: {
-          strictFilters: strict,
-          mainDepositAddress: mainDeposit,
-          detectStartMinEt: getIbitDetectStartMinEt(),
-          detectEndMinEt: getIbitDetectEndMinEt(),
-          mainOutMinBtc: getIbitMainOutMinBtc(),
-          mainOutMaxBtc: getIbitMainOutMaxBtc(),
-          coinbaseTxLimit,
-          signalMaxAgeSec: getIbitSignalMaxAgeSec(),
-        },
-        signals: [],
-        batchGroups: [],
-        error: msg,
-      };
-    }
+  /** 2) Coinbase deposit addresses — large BTC in to main deposit → signal */
+  if (isIbitCoinbasePollEnabled()) {
+    for (const addr of coinbaseAddresses) {
+      let txs: BlockstreamTxRef[];
+      try {
+        txs = await fetchAddressTxs(addr, coinbaseTxLimit);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          configured: true,
+          watchAddresses,
+          coinbaseAddresses,
+          inLegacySignalWindow: isWithinSignalWindowEt(),
+          inDetectWindow: nowInActiveDetectWindow(),
+          pollSourceWatchAddresses: pollWatch,
+          detection: {
+            strictFilters: strict,
+            mainDepositAddress: mainDeposit,
+            detectStartMinEt: getIbitDetectStartMinEt(),
+            detectEndMinEt: getIbitDetectEndMinEt(),
+            mainOutMinBtc: getIbitMainOutMinBtc(),
+            mainOutMaxBtc: getIbitMainOutMaxBtc(),
+            coinbaseTxLimit,
+            signalMaxAgeSec: getIbitSignalMaxAgeSec(),
+          },
+          signals: [],
+          batchGroups: [],
+          error: msg,
+        };
+      }
 
-    for (const tx of txs) {
-      processTx(tx, 'coinbase_deposit');
+      for (const tx of txs) {
+        processTx(tx, 'coinbase_deposit');
+      }
     }
   }
 
@@ -399,13 +389,17 @@ export async function pollIbitTransfers(): Promise<{
 
   /** Do not re-emit txids the server already recorded as processed (survives refresh). */
   const serverSeen = getBlkServerProcessedTxids();
-  /** One BLK session per ET calendar day — multiple morning transfers = different txids. */
-  const tradedEtDays = getBlkServerTradedEtDayKeys();
+  const tradedShortDays = getBlkServerTradedShortEtDayKeys();
+  const tradedLongDays = getBlkServerTradedLongEtDayKeys();
   const filteredSignals = signals.filter((s) => {
     if (serverSeen.has(s.txid.toLowerCase())) return false;
     if (s.blockTime > 0) {
       const dk = getEtDayKey(new Date(s.blockTime * 1000));
-      if (tradedEtDays.has(dk)) return false;
+      if (s.blkArkhamBatchRole === 'second_in_long') {
+        if (tradedLongDays.has(dk)) return false;
+      } else {
+        if (tradedShortDays.has(dk)) return false;
+      }
     }
     return true;
   });
