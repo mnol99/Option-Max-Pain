@@ -25,6 +25,7 @@ The SOL trading bot uses the same inside-bar pattern on **60m** and **Daily (ET 
 ## Pattern Rules
 
 - **Detection:** Inside bar (contained within prior) + smallest of past 3 ranges
+- **Armed pattern:** Once `pattern_detected`, the setup stays until **pattern candle close + 2× bar length** (same clock as the management window). New hourly bars that are **not** a fresh inside pattern no longer clear the armed state immediately — so a break **after** the next hour (e.g. 5am+ after a 4–5am pattern on 60m) can still trigger.
 - **Long trigger:** Price breaks above inside bar high
 - **Short trigger:** Price breaks below inside bar low
 - **TP:** Entry ± range (high + range for long, low - range for short)

@@ -5,9 +5,9 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { VersionedTransaction } from '@solana/web3.js';
 import { detectPattern, isBreakoutLong, isBreakoutShort } from '@/lib/solana-bot/pattern-engine';
+import { applyInsideBarPatternFromCandles } from '@/lib/solana-bot/inside-bar-engine';
 import {
   createInitialState,
-  createPatternDetectedState,
   enterLong,
   enterShort,
   checkPositionExit,
@@ -781,53 +781,27 @@ export default function TradePage() {
   // Pattern detection when candles update (each strategy / bar size) — live mode only; paper uses server tick
   useEffect(() => {
     if (!liveMode) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const patternRefs = {
+      entering: Object.fromEntries(
+        INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
+      ),
+      breakout: Object.fromEntries(
+        INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...breakoutRef.current[s.id] }])
+      ),
+    };
     setStateByStrategy((prev) => {
-      let next = prev;
-      let changed = false;
+      const merged = applyInsideBarPatternFromCandles(
+        INSIDE_BAR_STRATEGIES,
+        prev,
+        candlesByStrategy,
+        patternRefs,
+        nowSec
+      );
       for (const s of INSIDE_BAR_STRATEGIES) {
-        const c = candlesByStrategy[s.id] ?? [];
-        if (c.length < 4) continue;
-        const st = prev[s.id];
-        if (!st) continue;
-        if (st.status !== 'idle' && st.status !== 'stopped' && st.status !== 'pattern_detected')
-          continue;
-
-        const setup = detectPattern(c, s.intervalSec);
-        const sameCandleAlreadyTraded =
-          setup != null &&
-          st.lastTradedCandleUnixTime != null &&
-          setup.candleUnixTime === st.lastTradedCandleUnixTime;
-
-        // No longer a valid pattern, or same inside bar we already traded — drop stale "pattern detected"
-        if (!setup || sameCandleAlreadyTraded) {
-          if (st.status === 'pattern_detected') {
-            if (!changed) {
-              next = { ...prev };
-              changed = true;
-            }
-            next[s.id] = {
-              ...createInitialState(),
-              lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
-            };
-          }
-          continue;
-        }
-
-        const isDoubleInside =
-          st.status === 'pattern_detected' &&
-          st.setup &&
-          st.setup.candleUnixTime !== setup.candleUnixTime;
-        if (!changed) {
-          next = { ...prev };
-          changed = true;
-        }
-        next[s.id] = {
-          ...createPatternDetectedState(setup),
-          lastTradedCandleUnixTime: prev[s.id]?.lastTradedCandleUnixTime,
-        };
-        if (isDoubleInside) breakoutRef.current[s.id] = { long: 0, short: 0 };
+        breakoutRef.current[s.id] = { ...patternRefs.breakout[s.id] };
       }
-      return changed ? next : prev;
+      return merged;
     });
   }, [candlesByStrategy, liveMode]);
 

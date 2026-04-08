@@ -11,6 +11,7 @@ import {
   enterShort,
   checkPositionExit,
   checkReversedExit,
+  managementWindowEndFromSetup,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import type { StrategyTabDef } from '@/lib/solana-bot/strategy-tabs';
@@ -51,7 +52,8 @@ export function applyInsideBarPatternFromCandles(
   strategies: StrategyTabDef[],
   prev: Record<string, TradeState>,
   candlesByStrategy: Record<string, OHLCVCandle[]>,
-  refs: InsideBarRefs
+  refs: InsideBarRefs,
+  nowSec: number = Math.floor(Date.now() / 1000)
 ): Record<string, TradeState> {
   let next = prev;
   let changed = false;
@@ -71,6 +73,38 @@ export function applyInsideBarPatternFromCandles(
       st.lastTradedCandleUnixTime != null &&
       setup.candleUnixTime === st.lastTradedCandleUnixTime;
 
+    if (setup && !sameCandleAlreadyTraded) {
+      const isDoubleInside =
+        st.status === 'pattern_detected' &&
+        st.setup &&
+        st.setup.candleUnixTime !== setup.candleUnixTime;
+
+      if (!changed) {
+        next = { ...prev };
+        changed = true;
+      }
+      next[s.id] = {
+        ...createPatternDetectedState(setup),
+        lastTradedCandleUnixTime: prev[s.id]?.lastTradedCandleUnixTime,
+      };
+      if (isDoubleInside) refs.breakout[s.id] = { long: 0, short: 0 };
+      continue;
+    }
+
+    /**
+     * No fresh pattern on latest 4 candles — but an armed setup may still be valid until
+     * periodEnd + 2× bar (same as management window). Otherwise the next hourly bar that
+     * fails inside-bar clears pattern_detected and we never see a break in the following hours.
+     */
+    if (
+      st.status === 'pattern_detected' &&
+      st.setup &&
+      !sameCandleAlreadyTraded &&
+      nowSec < managementWindowEndFromSetup(st.setup)
+    ) {
+      continue;
+    }
+
     if (!setup || sameCandleAlreadyTraded) {
       if (st.status === 'pattern_detected') {
         if (!changed) {
@@ -84,21 +118,6 @@ export function applyInsideBarPatternFromCandles(
       }
       continue;
     }
-
-    const isDoubleInside =
-      st.status === 'pattern_detected' &&
-      st.setup &&
-      st.setup.candleUnixTime !== setup.candleUnixTime;
-
-    if (!changed) {
-      next = { ...prev };
-      changed = true;
-    }
-    next[s.id] = {
-      ...createPatternDetectedState(setup),
-      lastTradedCandleUnixTime: prev[s.id]?.lastTradedCandleUnixTime,
-    };
-    if (isDoubleInside) refs.breakout[s.id] = { long: 0, short: 0 };
   }
 
   return changed ? next : prev;
@@ -256,11 +275,13 @@ export function runInsideBarStep(
     entering: { ...refsIn.entering },
     breakout: { ...refsIn.breakout },
   };
+  const nowSec = Math.floor(Date.now() / 1000);
   const stateAfterPattern = applyInsideBarPatternFromCandles(
     strategies,
     prevState,
     candlesByStrategy,
-    refsPattern
+    refsPattern,
+    nowSec
   );
   const afterPrice = applyInsideBarPriceTick(
     strategies,
