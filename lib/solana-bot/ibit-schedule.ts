@@ -48,6 +48,14 @@ export const BLK_COVER_SLOT_COUNT_MORNING = 18;
 /** Afternoon batch (signal after 10:00 ET same day): 6 slots 15:00–15:50 ET (3:00–3:50pm), covers 3–4pm window. */
 export const BLK_COVER_SLOT_COUNT_AFTERNOON = 6;
 
+/**
+ * Long BLK (2nd CB→BR batch): 11 slots 14:00–15:40 ET (every 10m), within the 2:00–3:45 PM liquidation window.
+ */
+export const BLK_LONG_COVER_SLOT_COUNT = 11;
+
+/** After this ET time (inclusive), do not emit or poll for new long (buy) batch signals the same day. */
+export const BLK_LONG_BUY_TRIGGER_CUTOFF_MIN_ET = 14 * 60; // 14:00
+
 /** Minutes from midnight ET in [start, end) → use afternoon cover schedule. */
 export function blkUsesAfternoonCoverScheduleEt(anchorUtc: Date): boolean {
   const m = getEtMinutesFromMidnight(anchorUtc);
@@ -72,6 +80,21 @@ export function getBlkCoverScheduleUtc(anchorUtc: Date): Date[] {
     slots.push(etLocalToUtc(y.year, y.month, y.day, 10, i * 10));
   }
   return slots;
+}
+
+/** Long liquidation: same ET calendar day as signal anchor — 14:00, 14:10, …, 15:40. */
+export function getBlkLongCoverScheduleUtc(anchorUtc: Date): Date[] {
+  const y = etYearMonthDay(anchorUtc);
+  const slots: Date[] = [];
+  for (let i = 0; i < BLK_LONG_COVER_SLOT_COUNT; i++) {
+    slots.push(etLocalToUtc(y.year, y.month, y.day, 14, i * 10));
+  }
+  return slots;
+}
+
+/** True while wall-clock ET is still before the long buy-trigger cutoff (default 2:00 PM). */
+export function isBeforeBlkLongBuyTriggerWindowEt(now: Date = new Date()): boolean {
+  return getEtMinutesFromMidnight(now) < BLK_LONG_BUY_TRIGGER_CUTOFF_MIN_ET;
 }
 
 function getEtParts(d: Date): { hour: number; minute: number; second: number } {

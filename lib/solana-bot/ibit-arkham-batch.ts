@@ -19,7 +19,13 @@ import {
   getArkhamTransferLimit,
   getIbitMainDepositAddress,
 } from '@/lib/solana-bot/ibit-config';
-import { getCoverScheduleUtc, getEtDayKey, IBIT_TZ } from '@/lib/solana-bot/ibit-schedule';
+import {
+  getBlkLongCoverScheduleUtc,
+  getCoverScheduleUtc,
+  getEtDayKey,
+  IBIT_TZ,
+  isBeforeBlkLongBuyTriggerWindowEt,
+} from '@/lib/solana-bot/ibit-schedule';
 import type { IbitTransferSignal } from '@/lib/solana-bot/ibit-types';
 import {
   getArkhamBatchDayState,
@@ -73,7 +79,10 @@ function buildSignal(
       : sumFromAddressAsInput(tx, mainDeposit);
   const mainOutBtc = mainOutSats / 1e8;
   const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
-  const coverScheduleUtc = getCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const coverScheduleUtc =
+    role === 'second_in_long'
+      ? getBlkLongCoverScheduleUtc(anchor).map((d) => d.toISOString())
+      : getCoverScheduleUtc(anchor).map((d) => d.toISOString());
 
   return {
     txid: tx.txid,
@@ -200,7 +209,7 @@ export async function processArkhamBatchSignals(): Promise<{
     }
   }
 
-  if (inOrdered.length >= 2) {
+  if (inOrdered.length >= 2 && isBeforeBlkLongBuyTriggerWindowEt()) {
     const second = inOrdered[1]!;
     if (nextDay.emittedSecondInTxid !== second) {
       const tx = await fetchTx(second);

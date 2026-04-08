@@ -3,7 +3,12 @@
  * On-chain main output is recorded for audit only; position BTC = notionalUsd / entry price.
  */
 
-import { getBlkCoverScheduleUtc, getEtDayKey } from '@/lib/solana-bot/ibit-schedule';
+import {
+  BLK_LONG_COVER_SLOT_COUNT,
+  getBlkCoverScheduleUtc,
+  getBlkLongCoverScheduleUtc,
+  getEtDayKey,
+} from '@/lib/solana-bot/ibit-schedule';
 import type { ClosedTrade } from '@/lib/solana-bot/types';
 import { newTradeId } from '@/lib/solana-bot/trade-state';
 
@@ -11,6 +16,8 @@ export const BLK_STRATEGY_ID = 'blk';
 export const BLK_DEFAULT_NOTIONAL_USD = 1000;
 /** Max slices (morning schedule); afternoon uses 6. */
 export const BLK_COVER_SLICES = 18;
+/** Re-export for callers that import BLK constants from blk-paper. */
+export { BLK_LONG_COVER_SLOT_COUNT };
 
 export interface BlkPaperState {
   status: 'idle' | 'short_open' | 'long_open';
@@ -162,7 +169,7 @@ export function createBlkLongOpenState(
   const anchor = new Date(signalTimeSec * 1000);
   const notionalUsd = collateralUsd * leverage;
   const dayKey = getEtDayKey(anchor);
-  const coverScheduleUtc = getBlkCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const coverScheduleUtc = getBlkLongCoverScheduleUtc(anchor).map((d) => d.toISOString());
   const coverSliceCount = coverScheduleUtc.length;
   const paperLongBtc = notionalUsd / btcPrice;
   return {

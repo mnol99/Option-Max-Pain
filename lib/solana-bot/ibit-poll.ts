@@ -35,6 +35,7 @@ import {
   getEtDayStartUnix,
   getEtMinutesFromMidnight,
   IBIT_TZ,
+  isBeforeBlkLongBuyTriggerWindowEt,
   isBlockTimeInEtMinuteWindow,
   isWithinSignalWindowEt,
 } from '@/lib/solana-bot/ibit-schedule';
@@ -393,6 +394,9 @@ export async function pollIbitTransfers(): Promise<{
   const tradedLongDays = getBlkServerTradedLongEtDayKeys();
   const filteredSignals = signals.filter((s) => {
     if (serverSeen.has(s.txid.toLowerCase())) return false;
+    if (s.blkArkhamBatchRole === 'second_in_long' && !isBeforeBlkLongBuyTriggerWindowEt()) {
+      return false;
+    }
     if (s.blockTime > 0) {
       const dk = getEtDayKey(new Date(s.blockTime * 1000));
       if (s.blkArkhamBatchRole === 'second_in_long') {

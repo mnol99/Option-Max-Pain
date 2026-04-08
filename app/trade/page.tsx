@@ -46,6 +46,7 @@ import {
   isWeekendHalt60mEt,
   BLK_COVER_SLOT_COUNT_MORNING,
   BLK_COVER_SLOT_COUNT_AFTERNOON,
+  BLK_LONG_COVER_SLOT_COUNT,
   getEtDayKey,
 } from '@/lib/solana-bot/ibit-schedule';
 
@@ -1290,10 +1291,12 @@ export default function TradePage() {
             <>
               <span className="font-semibold">BLK</span> — paper short = your position size ($
               {paperPositionSizeUsd.toFixed(0)}); on-chain BTC to Coinbase is shown for signal context only.
-              {BLK_COVER_SLOT_COUNT_MORNING} covers <span className="font-semibold">10:00–12:50 ET</span> if the
+              Short: {BLK_COVER_SLOT_COUNT_MORNING} covers <span className="font-semibold">10:00–12:50 ET</span> if the
               signal is before 10am ET;{' '}
               {BLK_COVER_SLOT_COUNT_AFTERNOON} covers <span className="font-semibold">3:00–3:50 ET</span> if the
-              signal is from 10am onward (same day). Pyth BTC. Signals from{' '}
+              signal is from 10am onward. Long (2nd CB→BR batch): {BLK_LONG_COVER_SLOT_COUNT} sells{' '}
+              <span className="font-semibold">2:00–3:40 ET</span> (within 2:00–3:45 PM); no new long signal after{' '}
+              <span className="font-semibold">2:00 PM ET</span>. Pyth BTC. Signals from{' '}
               <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
           ) : (
@@ -1485,7 +1488,13 @@ export default function TradePage() {
                         <span className="font-mono">
                           {(
                             blkPaperState.paperShortBtc /
-                            Math.max(1, blkPaperState.coverSliceCount || BLK_COVER_SLICES)
+                            Math.max(
+                              1,
+                              blkPaperState.coverSliceCount ||
+                                (blkPaperState.status === 'long_open'
+                                  ? BLK_LONG_COVER_SLOT_COUNT
+                                  : BLK_COVER_SLICES)
+                            )
                           ).toFixed(6)}{' '}
                           BTC
                         </span>
@@ -1494,10 +1503,19 @@ export default function TradePage() {
                         <span className="text-gray-600">Cover progress</span>
                         <span className="font-mono">
                           {blkPaperState.nextSliceIndex}/
-                          {Math.max(1, blkPaperState.coverSliceCount || BLK_COVER_SLICES)} slices (
-                          {blkPaperState.coverSliceCount === BLK_COVER_SLOT_COUNT_AFTERNOON
-                            ? '3:00–4:00 ET'
-                            : '10:00–12:50 ET'}
+                          {Math.max(
+                            1,
+                            blkPaperState.coverSliceCount ||
+                              (blkPaperState.status === 'long_open'
+                                ? BLK_LONG_COVER_SLOT_COUNT
+                                : BLK_COVER_SLICES)
+                          )}{' '}
+                          slices (
+                          {blkPaperState.status === 'long_open'
+                            ? '2:00–3:45 ET'
+                            : blkPaperState.coverSliceCount === BLK_COVER_SLOT_COUNT_AFTERNOON
+                              ? '3:00–4:00 ET'
+                              : '10:00–12:50 ET'}
                           )
                         </span>
                       </div>
