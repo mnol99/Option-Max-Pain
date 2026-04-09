@@ -67,6 +67,23 @@ export function applyInsideBarPatternFromCandles(
     if (st.status !== 'idle' && st.status !== 'stopped' && st.status !== 'pattern_detected')
       continue;
 
+    /** After management window end, do not keep re-arming from the same candle buffer — late ticks could still enter + instant time-exit. */
+    if (
+      st.status === 'pattern_detected' &&
+      st.setup &&
+      nowSec >= managementWindowEndFromSetup(st.setup)
+    ) {
+      if (!changed) {
+        next = { ...prev };
+        changed = true;
+      }
+      next[s.id] = {
+        ...createInitialState(),
+        lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+      };
+      continue;
+    }
+
     const setup = detectPattern(c, s.intervalSec);
     const sameCandleAlreadyTraded =
       setup != null &&
@@ -200,6 +217,16 @@ export function applyInsideBarPriceTick(
 
     if (st.status === 'pattern_detected' && st.setup && !refs.entering[sid]) {
       const setup = st.setup;
+      const windowEnd = managementWindowEndFromSetup(setup);
+      if (priceTime >= windowEnd) {
+        state[sid] = {
+          ...createInitialState(),
+          lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+        };
+        refs.entering[sid] = false;
+        refs.breakout[sid] = { long: 0, short: 0 };
+        continue;
+      }
       const longBreakout = isBreakoutLong(price, setup);
       const shortBreakout = isBreakoutShort(price, setup);
       const bc = bcFor(sid);
