@@ -204,6 +204,33 @@ export function getArkhamBatchToleranceBtc(): number {
   return 50;
 }
 
+/**
+ * Tight half-band for **striker** leg in pair mode (default 25 → 275–325 BTC for target 300).
+ * Run-up legs must be **below** `target - strikerTol` so ~266 BTC is not a striker.
+ */
+export function getArkhamBatchStrikerToleranceBtc(): number {
+  const n = Number(process.env.ARKHAM_BATCH_STRIKER_TOLERANCE_BTC);
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 25;
+}
+
+/** Minimum BTC for **run-up** leg before striker (default 200). */
+export function getArkhamBatchRunMinBtc(): number {
+  const n = Number(process.env.ARKHAM_BATCH_RUN_MIN_BTC);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 200;
+}
+
+/**
+ * Coinbase spend / cluster addresses used as prevouts on CB→BR (and change outputs to exclude for BR leg size).
+ * Default includes the common Prime hot seen on large batch txs.
+ */
+export function getArkhamBatchCoinbaseSpendAddresses(): string[] {
+  const fromEnv = parseList(process.env.ARKHAM_CB_SPEND_ADDRESSES);
+  if (fromEnv.length > 0) return fromEnv;
+  return ['3MqUP6G1daVS5YTD8fz3QgwjZortWwxXFd'];
+}
+
 /** Arkham `counterparties` slug (default coinbase). */
 export function getArkhamCounterpartySlug(): string {
   const e = process.env.ARKHAM_COUNTERPARTY?.trim();

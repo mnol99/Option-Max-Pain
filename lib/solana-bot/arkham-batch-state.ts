@@ -13,10 +13,14 @@ export interface DayPayload {
   outHashes: string[];
   /** Qualifying in: CB→BR */
   inHashes: string[];
-  /** txid we already emitted as 2nd-out short signal */
+  /** txid we already emitted as 2nd-out short signal (legacy name) */
   emittedSecondOutTxid: string | null;
-  /** txid we already emitted as 2nd-in long signal */
+  /** txid we already emitted as 2nd-in long signal (legacy name) */
   emittedSecondInTxid: string | null;
+  /** Striker BR→CB short after a 200+ run-up (pair mode) */
+  emittedPairShortStrikerTxid?: string | null;
+  /** Striker CB→BR long after a 200+ run-up (pair mode) */
+  emittedPairLongStrikerTxid?: string | null;
 }
 
 interface FilePayload {
@@ -73,6 +77,8 @@ export function getArkhamBatchDayState(etDayKey: string): DayPayload {
       inHashes: [...(file.day.inHashes ?? [])],
       emittedSecondOutTxid: file.day.emittedSecondOutTxid ?? null,
       emittedSecondInTxid: file.day.emittedSecondInTxid ?? null,
+      emittedPairShortStrikerTxid: file.day.emittedPairShortStrikerTxid ?? null,
+      emittedPairLongStrikerTxid: file.day.emittedPairLongStrikerTxid ?? null,
     };
   }
   return {
@@ -81,6 +87,8 @@ export function getArkhamBatchDayState(etDayKey: string): DayPayload {
     inHashes: [],
     emittedSecondOutTxid: null,
     emittedSecondInTxid: null,
+    emittedPairShortStrikerTxid: null,
+    emittedPairLongStrikerTxid: null,
   };
 }
 

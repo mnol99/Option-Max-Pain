@@ -82,6 +82,33 @@ export function sumFromAddressAsInput(tx: BlockstreamTxRef, address: string): nu
   return sats;
 }
 
+/** Sum prevout values for any address in `addresses` (Coinbase cluster spend → BR / external). */
+export function sumFromAddressesAsInput(tx: BlockstreamTxRef, addresses: Set<string>): number {
+  let sats = 0;
+  for (const v of tx.vin || []) {
+    const a = v.prevout?.scriptpubkey_address;
+    if (a && addresses.has(a)) sats += Math.round(v.prevout?.value ?? 0);
+  }
+  return sats;
+}
+
+/**
+ * Largest output (sats) whose address is **not** in `excludeAddresses` (e.g. exclude Coinbase change).
+ * Used for CB→BR batch size (custodian receipt leg).
+ */
+export function maxOutputSatsExcludingAddresses(
+  tx: BlockstreamTxRef,
+  excludeAddresses: Set<string>
+): number {
+  let max = 0;
+  for (const o of tx.vout || []) {
+    const a = o.scriptpubkey_address;
+    if (!a || excludeAddresses.has(a)) continue;
+    max = Math.max(max, Math.round(o.value));
+  }
+  return max;
+}
+
 /** Distinct addresses appearing as spend inputs (prevouts). */
 export function collectInputSourceAddresses(tx: BlockstreamTxRef): string[] {
   const set = new Set<string>();
