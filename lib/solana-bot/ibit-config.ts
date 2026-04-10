@@ -249,6 +249,11 @@ export function isIbitCoinbasePollEnabled(): boolean {
   return process.env.IBIT_DISABLE_COINBASE_POLL !== '1';
 }
 
+/** When `1` (default): CB→BR long on **2nd** ~300 BTC striker in chronological order (no run-up required). Set `0` to disable. */
+export function isArkhamSecondStrikerLongEnabled(): boolean {
+  return process.env.ARKHAM_SECOND_STRIKER_LONG !== '0';
+}
+
 /**
  * Max age (seconds) of **block time** for a signal to count as "fresh".
  * Default **2h** avoids re-triggering the same morning transfer hours later on refresh (when

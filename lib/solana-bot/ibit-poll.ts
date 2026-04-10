@@ -394,12 +394,15 @@ export async function pollIbitTransfers(): Promise<{
   const tradedLongDays = getBlkServerTradedLongEtDayKeys();
   const filteredSignals = signals.filter((s) => {
     if (serverSeen.has(s.txid.toLowerCase())) return false;
-    if (s.blkArkhamBatchRole === 'second_in_long' && !isBeforeBlkLongBuyTriggerWindowEt()) {
+    if (
+      (s.blkArkhamBatchRole === 'second_in_long' || s.blkArkhamBatchRole === 'second_striker_in_long') &&
+      !isBeforeBlkLongBuyTriggerWindowEt()
+    ) {
       return false;
     }
     if (s.blockTime > 0) {
       const dk = getEtDayKey(new Date(s.blockTime * 1000));
-      if (s.blkArkhamBatchRole === 'second_in_long') {
+      if (s.blkArkhamBatchRole === 'second_in_long' || s.blkArkhamBatchRole === 'second_striker_in_long') {
         if (tradedLongDays.has(dk)) return false;
       } else {
         if (tradedShortDays.has(dk)) return false;

@@ -21,6 +21,8 @@ export interface DayPayload {
   emittedPairShortStrikerTxid?: string | null;
   /** Striker CB→BR long after a 200+ run-up (pair mode) */
   emittedPairLongStrikerTxid?: string | null;
+  /** Long on 2nd ~300 BTC striker (CB→BR), chronological — no run-up required */
+  emittedSecondStrikerInLongTxid?: string | null;
 }
 
 interface FilePayload {
@@ -79,6 +81,7 @@ export function getArkhamBatchDayState(etDayKey: string): DayPayload {
       emittedSecondInTxid: file.day.emittedSecondInTxid ?? null,
       emittedPairShortStrikerTxid: file.day.emittedPairShortStrikerTxid ?? null,
       emittedPairLongStrikerTxid: file.day.emittedPairLongStrikerTxid ?? null,
+      emittedSecondStrikerInLongTxid: file.day.emittedSecondStrikerInLongTxid ?? null,
     };
   }
   return {
@@ -89,6 +92,7 @@ export function getArkhamBatchDayState(etDayKey: string): DayPayload {
     emittedSecondInTxid: null,
     emittedPairShortStrikerTxid: null,
     emittedPairLongStrikerTxid: null,
+    emittedSecondStrikerInLongTxid: null,
   };
 }
 

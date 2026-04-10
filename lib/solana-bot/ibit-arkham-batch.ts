@@ -24,6 +24,7 @@ import {
   getArkhamTransferBase,
   getArkhamTransferLimit,
   getIbitMainDepositAddress,
+  isArkhamSecondStrikerLongEnabled,
 } from '@/lib/solana-bot/ibit-config';
 import {
   getBlkLongCoverScheduleUtc,
@@ -113,7 +114,7 @@ function arkhamHintRelevant(
 
 function buildSignal(
   tx: NonNullable<Awaited<ReturnType<typeof fetchTx>>>,
-  role: 'second_out_short' | 'second_in_long',
+  role: 'second_out_short' | 'second_in_long' | 'second_striker_in_long',
   mainDeposit: string,
   arkhamBase: string,
   cbSpendSet: Set<string>
@@ -125,10 +126,10 @@ function buildSignal(
       : sumFromAddressesAsInput(tx, cbSpendSet);
   const mainOutBtc = mainOutSats / 1e8;
   const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
-  const coverScheduleUtc =
-    role === 'second_in_long'
-      ? getBlkLongCoverScheduleUtc(anchor).map((d) => d.toISOString())
-      : getCoverScheduleUtc(anchor).map((d) => d.toISOString());
+  const isLongRole = role === 'second_in_long' || role === 'second_striker_in_long';
+  const coverScheduleUtc = isLongRole
+    ? getBlkLongCoverScheduleUtc(anchor).map((d) => d.toISOString())
+    : getCoverScheduleUtc(anchor).map((d) => d.toISOString());
 
   return {
     txid: tx.txid,
@@ -292,6 +293,7 @@ export async function processArkhamBatchSignals(): Promise<{
     emittedSecondInTxid: day.emittedSecondInTxid,
     emittedPairShortStrikerTxid: day.emittedPairShortStrikerTxid ?? null,
     emittedPairLongStrikerTxid: day.emittedPairLongStrikerTxid ?? null,
+    emittedSecondStrikerInLongTxid: day.emittedSecondStrikerInLongTxid ?? null,
   };
 
   const outSignals: IbitTransferSignal[] = [];
@@ -319,6 +321,26 @@ export async function processArkhamBatchSignals(): Promise<{
       if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
       outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
       nextDay.emittedPairLongStrikerTxid = cur.hash;
+      break;
+    }
+  }
+
+  /** Long on 2nd ~300 BTC striker (CB→BR), chronological — e.g. two 300s in a row. */
+  if (isArkhamSecondStrikerLongEnabled() && isBeforeBlkLongBuyTriggerWindowEt()) {
+    const strikers = inRows.filter((r) => r.kind === 'striker');
+    for (let i = 1; i < strikers.length; i++) {
+      const cur = strikers[i]!;
+      if (nextDay.emittedSecondStrikerInLongTxid === cur.hash) break;
+      const tx = await fetchTx(cur.hash);
+      const bt = tx?.status?.block_time ?? 0;
+      if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
+      const dup = outSignals.some((s) => s.txid.toLowerCase() === cur.hash.toLowerCase());
+      if (dup) {
+        nextDay.emittedSecondStrikerInLongTxid = cur.hash;
+        break;
+      }
+      outSignals.push(buildSignal(tx, 'second_striker_in_long', mainDeposit, transferBase, cbSpendSet));
+      nextDay.emittedSecondStrikerInLongTxid = cur.hash;
       break;
     }
   }

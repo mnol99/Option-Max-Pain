@@ -654,7 +654,7 @@ export default function TradePage() {
               watchListMatch?: boolean;
               signalSource?: string;
               arkhamEntityBase?: string;
-              blkArkhamBatchRole?: 'second_out_short' | 'second_in_long';
+              blkArkhamBatchRole?: 'second_out_short' | 'second_in_long' | 'second_striker_in_long';
             }>;
           };
         }>(res);
@@ -668,7 +668,7 @@ export default function TradePage() {
           watchListMatch?: boolean;
           signalSource?: string;
           arkhamEntityBase?: string;
-          blkArkhamBatchRole?: 'second_out_short' | 'second_in_long';
+          blkArkhamBatchRole?: 'second_out_short' | 'second_in_long' | 'second_striker_in_long';
         }>;
         const price = btcPrice;
         setBlkPaperState((prev) => {
@@ -678,7 +678,7 @@ export default function TradePage() {
             const t = sig.blockTime > 0 ? sig.blockTime : Math.floor(Date.now() / 1000);
             const signalDayKey = getEtDayKey(new Date(t * 1000));
             const role = sig.blkArkhamBatchRole;
-            const isLongSignal = role === 'second_in_long';
+            const isLongSignal = role === 'second_in_long' || role === 'second_striker_in_long';
             const isShortSignal = role === 'second_out_short' || role == null;
             if (isLongSignal) {
               if (blkTradedLongEtDaysRef.current.has(signalDayKey)) continue;

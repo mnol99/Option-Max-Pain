@@ -17,7 +17,7 @@ export interface IbitTransferSignal {
   coverScheduleUtc: string[];
   detectionMode: 'strict' | 'legacy';
   /** Arkham batch mode: which rule fired */
-  blkArkhamBatchRole?: 'second_out_short' | 'second_in_long';
+  blkArkhamBatchRole?: 'second_out_short' | 'second_in_long' | 'second_striker_in_long';
   /** Arkham-reported unit BTC (hint for audit) */
   arkhamUnitBtc?: number;
 }
