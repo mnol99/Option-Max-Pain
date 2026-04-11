@@ -13,8 +13,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ ticker: string }> }
 ) {
+  const { ticker } = await params;
   try {
-    const { ticker } = await params;
     const normalizedTicker = normalizeTicker(ticker);
     const searchParams = request.nextUrl.searchParams;
     const live = searchParams.get('live') === 'true';
@@ -41,9 +41,8 @@ export async function GET(
     
     // Fallback to mock data on any error
     try {
-      const { ticker: tickerParam } = await params;
       const { fetchOptionsChain } = await import('@/lib/options-api');
-      const mockData = await fetchOptionsChain(normalizeTicker(tickerParam));
+      const mockData = await fetchOptionsChain(normalizeTicker(ticker));
       
       // If it's an auth error, provide helpful guidance (but only show once)
       if (isAuthError) {
