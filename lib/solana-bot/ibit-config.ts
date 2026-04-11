@@ -267,3 +267,20 @@ export function getIbitSignalMaxAgeSec(): number {
   if (Number.isFinite(n) && n >= 0) return Math.floor(n);
   return 7200;
 }
+
+/**
+ * When `1`, skip the server `setInterval` that calls `pollIbitTransfers` (browser/API-only polling).
+ */
+export function isIbitServerPollHeartbeatEnabled(): boolean {
+  return process.env.IBIT_DISABLE_SERVER_POLL !== '1';
+}
+
+/**
+ * Cadence for server-side IBIT poll (default 60s). Min 10s to reduce Arkham/Blockstream load.
+ * Override with `IBIT_SERVER_POLL_MS`.
+ */
+export function getIbitServerPollIntervalMs(): number {
+  const n = Number(process.env.IBIT_SERVER_POLL_MS);
+  if (Number.isFinite(n) && n >= 10_000) return Math.floor(n);
+  return 60_000;
+}
