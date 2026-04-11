@@ -37,6 +37,7 @@ import {
   IBIT_TZ,
   isBeforeBlkLongBuyTriggerWindowEt,
   isBlockTimeInEtMinuteWindow,
+  isWithinArkhamPollWindowEt,
   isWithinSignalWindowEt,
 } from '@/lib/solana-bot/ibit-schedule';
 import {
@@ -48,6 +49,7 @@ import type { IbitBatchGroup, IbitTransferSignal } from '@/lib/solana-bot/ibit-t
 import { processArkhamBatchSignals } from '@/lib/solana-bot/ibit-arkham-batch';
 import {
   isArkhamBatchModeEnabled,
+  isIbitArkhamPollScheduleEnabled,
   isIbitCoinbasePollEnabled,
 } from '@/lib/solana-bot/ibit-config';
 
@@ -135,6 +137,8 @@ export async function pollIbitTransfers(): Promise<{
     transferBase: string;
     timeLast: string;
     error?: string;
+    /** Present when API was not called (weekly ET window: Sun 00:00 – Fri before 16:00). */
+    pollSkippedReason?: string;
   };
   detection: {
     strictFilters: boolean;
@@ -162,8 +166,12 @@ export async function pollIbitTransfers(): Promise<{
   const strict = isIbitStrictFiltersEnabled();
   const pollWatch = isIbitPollSourceWatchAddresses();
   const coinbaseTxLimit = getIbitCoinbaseAddressTxLimit();
+  const nowPoll = new Date();
+  const allowArkhamHttp =
+    !isIbitArkhamPollScheduleEnabled() || isWithinArkhamPollWindowEt(nowPoll);
 
   if (coinbaseAddresses.length === 0) {
+    const key = getArkhamApiKey();
     return {
       configured: false,
       watchAddresses,
@@ -172,9 +180,12 @@ export async function pollIbitTransfers(): Promise<{
       inDetectWindow: nowInActiveDetectWindow(),
       pollSourceWatchAddresses: pollWatch,
       arkham: {
-        configured: !!getArkhamApiKey(),
+        configured: !!key,
         transferBase: getArkhamTransferBase(),
         timeLast: getArkhamTimeLast(),
+        ...(key && isIbitArkhamPollScheduleEnabled() && !allowArkhamHttp
+          ? { pollSkippedReason: 'outside_sun_midnight_fri_4pm_et' as const }
+          : {}),
       },
       detection: {
         strictFilters: strict,
@@ -265,7 +276,13 @@ export async function pollIbitTransfers(): Promise<{
     }
   }
 
-  let arkhamMeta: { configured: boolean; transferBase: string; timeLast: string; error?: string } = {
+  let arkhamMeta: {
+    configured: boolean;
+    transferBase: string;
+    timeLast: string;
+    error?: string;
+    pollSkippedReason?: string;
+  } = {
     configured: false,
     transferBase: getArkhamTransferBase(),
     timeLast: getArkhamTimeLast(),
@@ -278,12 +295,16 @@ export async function pollIbitTransfers(): Promise<{
     arkhamMeta.configured = true;
     arkhamMeta.transferBase = getArkhamTransferBase();
     arkhamMeta.timeLast = getArkhamTimeLast();
-    const batch = await processArkhamBatchSignals();
-    if (batch.error) arkhamMeta.error = batch.error;
-    for (const s of batch.signals) {
-      if (!seen.has(s.txid)) {
-        seen.add(s.txid);
-        signals.push(s);
+    if (!allowArkhamHttp) {
+      arkhamMeta.pollSkippedReason = 'outside_sun_midnight_fri_4pm_et';
+    } else {
+      const batch = await processArkhamBatchSignals();
+      if (batch.error) arkhamMeta.error = batch.error;
+      for (const s of batch.signals) {
+        if (!seen.has(s.txid)) {
+          seen.add(s.txid);
+          signals.push(s);
+        }
       }
     }
   } else if (isArkhamIbitPollEnabled() && arkhamKey) {
@@ -291,23 +312,27 @@ export async function pollIbitTransfers(): Promise<{
     const transferBase = getArkhamTransferBase();
     arkhamMeta.transferBase = transferBase;
     arkhamMeta.timeLast = getArkhamTimeLast();
-    const { transfers, error: arkErr } = await fetchArkhamBitcoinTransfersForBase({
-      apiKey: arkhamKey,
-      transferBase,
-      limit: getArkhamTransferLimit(),
-      timeLast: getArkhamTimeLast(),
-    });
-    if (arkErr) arkhamMeta.error = arkErr;
-    const seenArkhamHashes = new Set<string>();
-    for (const at of transfers) {
-      const h = arkhamTxHash(at);
-      if (!h || seenArkhamHashes.has(h)) continue;
-      seenArkhamHashes.add(h);
-      try {
-        const tx = await fetchTx(h);
-        if (tx) processTx(tx, 'arkham', transferBase);
-      } catch {
-        /* ignore */
+    if (!allowArkhamHttp) {
+      arkhamMeta.pollSkippedReason = 'outside_sun_midnight_fri_4pm_et';
+    } else {
+      const { transfers, error: arkErr } = await fetchArkhamBitcoinTransfersForBase({
+        apiKey: arkhamKey,
+        transferBase,
+        limit: getArkhamTransferLimit(),
+        timeLast: getArkhamTimeLast(),
+      });
+      if (arkErr) arkhamMeta.error = arkErr;
+      const seenArkhamHashes = new Set<string>();
+      for (const at of transfers) {
+        const h = arkhamTxHash(at);
+        if (!h || seenArkhamHashes.has(h)) continue;
+        seenArkhamHashes.add(h);
+        try {
+          const tx = await fetchTx(h);
+          if (tx) processTx(tx, 'arkham', transferBase);
+        } catch {
+          /* ignore */
+        }
       }
     }
   }

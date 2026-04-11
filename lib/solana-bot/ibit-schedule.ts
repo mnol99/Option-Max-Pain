@@ -243,3 +243,15 @@ export function isWeekendHalt60mEt(now: Date = new Date()): boolean {
   if (wd === 0 && min < 15 * 60) return true;
   return false;
 }
+
+/**
+ * Arkham poll window (America/New_York): **Sunday 00:00** through **Friday before 16:00** (exclusive at 4:00 PM).
+ * Saturday is fully off. Matches “Sun midnight → Fri 4pm” for API usage control.
+ */
+export function isWithinArkhamPollWindowEt(now: Date = new Date()): boolean {
+  const wd = getEtWeekday(now);
+  const min = getEtMinutesFromMidnight(now);
+  if (wd === 6) return false;
+  if (wd === 5 && min >= 16 * 60) return false;
+  return true;
+}

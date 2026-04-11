@@ -284,3 +284,11 @@ export function getIbitServerPollIntervalMs(): number {
   if (Number.isFinite(n) && n >= 10_000) return Math.floor(n);
   return 60_000;
 }
+
+/**
+ * When `1` (default), skip Arkham HTTP calls outside **Sun 00:00 ET – Fri before 16:00 ET** (see `isWithinArkhamPollWindowEt`).
+ * Set `IBIT_ARKHAM_POLL_SCHEDULE=0` to poll Arkham 24/7.
+ */
+export function isIbitArkhamPollScheduleEnabled(): boolean {
+  return process.env.IBIT_ARKHAM_POLL_SCHEDULE !== '0';
+}
