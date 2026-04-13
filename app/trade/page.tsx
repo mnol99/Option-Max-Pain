@@ -79,6 +79,18 @@ function formatTime(ts: number): string {
   });
 }
 
+/** Daily bars are ~24h ET each; raw "minutes" looks like a bug (e.g. 4974). */
+function formatWarmupEstimate(intervalSec: number, warmupMinutes: number): string {
+  if (intervalSec !== 86400) {
+    return `~${warmupMinutes} min`;
+  }
+  const d = Math.floor(warmupMinutes / (24 * 60));
+  const h = Math.ceil((warmupMinutes % (24 * 60)) / 60);
+  if (d > 0 && h > 0) return `~${d} day${d === 1 ? '' : 's'} ${h} hr`;
+  if (d > 0) return `~${d} day${d === 1 ? '' : 's'}`;
+  return `~${warmupMinutes} min`;
+}
+
 function formatPrice(n: number): string {
   return n.toFixed(2);
 }
@@ -1315,8 +1327,17 @@ export default function TradePage() {
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
             <p className="text-amber-800 font-medium">Building candle history</p>
             <p className="text-amber-700 text-sm mt-1">
-              Price feed is live. First {intervalLabel(activeIntervalSec)} pattern available in ~
-              {warmupMinutes} min (need 4 completed {intervalLabel(activeIntervalSec)} candles).
+              Price feed is live. First {intervalLabel(activeIntervalSec)} pattern in{' '}
+              {formatWarmupEstimate(activeIntervalSec, warmupMinutes)} (need 4 completed{' '}
+              {intervalLabel(activeIntervalSec)} candles).
+              {activeIntervalSec === 86400 && (
+                <>
+                  {' '}
+                  Each daily bar is one 8pm–7:59pm ET session (~24h). Set{' '}
+                  <code className="text-xs bg-amber-100 px-1">BIRDEYE_API_KEY</code> on the server to
+                  backfill and skip most of this wait after restarts.
+                </>
+              )}
             </p>
           </div>
         )}
