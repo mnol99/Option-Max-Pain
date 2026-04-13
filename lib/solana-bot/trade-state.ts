@@ -262,7 +262,8 @@ export function checkPositionExit(
           ...state,
           status: 'reversed',
           position: 'short',
-          entryPrice: price,
+          /** Same fill as long exit (stop at breakout low), not a later oracle tick. */
+          entryPrice: exitAt,
           entryTime: timestamp,
           windowEnd: state.windowEnd,
           timeWindowSec: tw,
@@ -330,7 +331,8 @@ export function checkPositionExit(
           ...state,
           status: 'reversed',
           position: 'long',
-          entryPrice: price,
+          /** Same fill as short exit (stop at breakout high), not a later oracle tick. */
+          entryPrice: exitAt,
           entryTime: timestamp,
           windowEnd: state.windowEnd,
           timeWindowSec: tw,
