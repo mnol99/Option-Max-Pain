@@ -1,7 +1,8 @@
 /**
  * Arkham batch mode (entity base = BlackRock, counterparty = Coinbase):
- * **Pair rule:** **200+ BTC run-up** (below tight striker band) then **~300 BTC striker** in time order
- * → **long** on CB→BR striker tx, **short** on BR→CB striker tx.
+ * - **Default pair rule:** 200+ BTC run-up (below tight ~300 band) then ~300 striker → short/long on striker tx.
+ * - **Simple pair (`ARKHAM_BATCH_SIMPLE_PAIR=1`):** two consecutive transfers (Blockstream BTC ≥ min each)
+ *   → **short** on 2nd BR→CB, **long** on 2nd CB→BR (long still needs block ≥9:30 ET, poll before 2pm ET wall).
  */
 
 import {
@@ -14,6 +15,7 @@ import { arkhamTxHash, fetchArkhamBitcoinTransfersForBase } from '@/lib/solana-b
 import {
   getArkhamApiKey,
   getArkhamBatchCoinbaseSpendAddresses,
+  getArkhamBatchPairMinBtc,
   getArkhamBatchRunMinBtc,
   getArkhamBatchStrikerToleranceBtc,
   getArkhamBatchTargetBtc,
@@ -24,6 +26,7 @@ import {
   getArkhamTransferBase,
   getArkhamTransferLimit,
   getIbitMainDepositAddress,
+  isArkhamBatchSimplePairEnabled,
   isArkhamSecondStrikerLongEnabled,
 } from '@/lib/solana-bot/ibit-config';
 import {
@@ -110,6 +113,39 @@ function arkhamHintRelevant(
   if (inBand(hint, target, strikerTol)) return true;
   if (hint >= runMin && hint < target + broadTol) return true;
   return false;
+}
+
+function arkhamHintRelevantSimple(hint: number, pairMinBtc: number): boolean {
+  if (!Number.isFinite(hint) || hint <= 0) return false;
+  return hint >= Math.max(50, pairMinBtc * 0.75);
+}
+
+interface SimplePairRow {
+  hash: string;
+  blockTime: number;
+  btc: number;
+}
+
+async function measureBrToCbBtc(
+  h: string,
+  mainDeposit: string
+): Promise<{ row: SimplePairRow } | null> {
+  const tx = await fetchTx(h);
+  if (!tx) return null;
+  const btc = sumToAddress(tx, mainDeposit) / 1e8;
+  const bt = tx.status?.block_time ?? 0;
+  return { row: { hash: h, blockTime: bt, btc } };
+}
+
+async function measureCbToBrBtc(
+  h: string,
+  cbSpendExclude: Set<string>
+): Promise<{ row: SimplePairRow } | null> {
+  const tx = await fetchTx(h);
+  if (!tx) return null;
+  const btc = maxOutputSatsExcludingAddresses(tx, cbSpendExclude) / 1e8;
+  const bt = tx.status?.block_time ?? 0;
+  return { row: { hash: h, blockTime: bt, btc } };
 }
 
 function buildSignal(
@@ -209,6 +245,8 @@ export async function processArkhamBatchSignals(): Promise<{
   const limit = getArkhamTransferLimit();
   const timeLast = getArkhamTimeLast();
   const longAfterMin = getArkhamLongAfterMinEt();
+  const simplePair = isArkhamBatchSimplePairEnabled();
+  const pairMinBtc = getArkhamBatchPairMinBtc();
 
   const etDayKey = getEtDayKey(new Date());
   const day = getArkhamBatchDayState(etDayKey);
@@ -242,7 +280,10 @@ export async function processArkhamBatchSignals(): Promise<{
     const h = arkhamTxHash(at);
     if (!h) continue;
     const hint = typeof at.unitValue === 'number' ? at.unitValue : 0;
-    if (!arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin)) continue;
+    const ok = simplePair
+      ? arkhamHintRelevantSimple(hint, pairMinBtc)
+      : arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin);
+    if (!ok) continue;
     outHashSet.add(h);
   }
 
@@ -252,8 +293,88 @@ export async function processArkhamBatchSignals(): Promise<{
     const h = arkhamTxHash(at);
     if (!h) continue;
     const hint = typeof at.unitValue === 'number' ? at.unitValue : 0;
-    if (!arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin)) continue;
+    const ok = simplePair
+      ? arkhamHintRelevantSimple(hint, pairMinBtc)
+      : arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin);
+    if (!ok) continue;
     inHashSet.add(h);
+  }
+
+  const outSignals: IbitTransferSignal[] = [];
+
+  const nextDayBase: DayPayload = {
+    etDayKey,
+    outHashes: [],
+    inHashes: [],
+    emittedSecondOutTxid: day.emittedSecondOutTxid,
+    emittedSecondInTxid: day.emittedSecondInTxid,
+    emittedPairShortStrikerTxid: day.emittedPairShortStrikerTxid ?? null,
+    emittedPairLongStrikerTxid: day.emittedPairLongStrikerTxid ?? null,
+    emittedSecondStrikerInLongTxid: day.emittedSecondStrikerInLongTxid ?? null,
+  };
+
+  if (simplePair) {
+    const outSimple: SimplePairRow[] = [];
+    for (const h of Array.from(outHashSet)) {
+      const m = await measureBrToCbBtc(h, mainDeposit);
+      if (!m || m.row.btc < pairMinBtc) continue;
+      let bt = m.row.blockTime;
+      if (bt <= 0) bt = await blockTimeForTx(h);
+      outSimple.push({ hash: h, blockTime: bt, btc: m.row.btc });
+    }
+    outSimple.sort((a, b) =>
+      a.blockTime !== b.blockTime ? a.blockTime - b.blockTime : a.hash.localeCompare(b.hash)
+    );
+
+    const nextDay: DayPayload = {
+      ...nextDayBase,
+      outHashes: outSimple.map((r) => r.hash),
+      inHashes: [],
+    };
+
+    for (let i = 1; i < outSimple.length; i++) {
+      const prev = outSimple[i - 1]!;
+      const cur = outSimple[i]!;
+      if (prev.btc < pairMinBtc || cur.btc < pairMinBtc) continue;
+      if (nextDay.emittedPairShortStrikerTxid === cur.hash) break;
+      const tx = await fetchTx(cur.hash);
+      if (!tx) continue;
+      outSignals.push(buildSignal(tx, 'second_out_short', mainDeposit, transferBase, cbSpendSet));
+      nextDay.emittedPairShortStrikerTxid = cur.hash;
+      break;
+    }
+
+    const inSimple: SimplePairRow[] = [];
+    for (const h of Array.from(inHashSet)) {
+      const m = await measureCbToBrBtc(h, cbSpendSet);
+      if (!m || m.row.btc < pairMinBtc) continue;
+      let bt = m.row.blockTime;
+      if (bt <= 0) bt = await blockTimeForTx(h);
+      inSimple.push({ hash: h, blockTime: bt, btc: m.row.btc });
+    }
+    inSimple.sort((a, b) =>
+      a.blockTime !== b.blockTime ? a.blockTime - b.blockTime : a.hash.localeCompare(b.hash)
+    );
+
+    nextDay.inHashes = inSimple.map((r) => r.hash);
+
+    if (isBeforeBlkLongBuyTriggerWindowEt()) {
+      for (let i = 1; i < inSimple.length; i++) {
+        const prev = inSimple[i - 1]!;
+        const cur = inSimple[i]!;
+        if (prev.btc < pairMinBtc || cur.btc < pairMinBtc) continue;
+        if (nextDay.emittedPairLongStrikerTxid === cur.hash) break;
+        const tx = await fetchTx(cur.hash);
+        const bt = tx?.status?.block_time ?? 0;
+        if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
+        outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
+        nextDay.emittedPairLongStrikerTxid = cur.hash;
+        break;
+      }
+    }
+
+    saveArkhamBatchDayState(nextDay);
+    return { signals: outSignals };
   }
 
   const outRows: ClassifiedRow[] = [];
@@ -286,17 +407,10 @@ export async function processArkhamBatchSignals(): Promise<{
   sortLegs(inRows);
 
   const nextDay: DayPayload = {
-    etDayKey,
+    ...nextDayBase,
     outHashes: outRows.map((r) => r.hash),
     inHashes: inRows.map((r) => r.hash),
-    emittedSecondOutTxid: day.emittedSecondOutTxid,
-    emittedSecondInTxid: day.emittedSecondInTxid,
-    emittedPairShortStrikerTxid: day.emittedPairShortStrikerTxid ?? null,
-    emittedPairLongStrikerTxid: day.emittedPairLongStrikerTxid ?? null,
-    emittedSecondStrikerInLongTxid: day.emittedSecondStrikerInLongTxid ?? null,
   };
-
-  const outSignals: IbitTransferSignal[] = [];
 
   for (let i = 1; i < outRows.length; i++) {
     const prev = outRows[i - 1]!;

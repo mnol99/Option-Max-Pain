@@ -255,6 +255,21 @@ export function isArkhamSecondStrikerLongEnabled(): boolean {
 }
 
 /**
+ * When `1`, pair signals use **two consecutive** transfers each **≥** `ARKHAM_BATCH_PAIR_MIN_BTC` (Blockstream-validated),
+ * instead of run-up (~200 below ~300 band) + striker (~300). Short =2nd BR→CB leg; long = 2nd CB→BR leg.
+ */
+export function isArkhamBatchSimplePairEnabled(): boolean {
+  return process.env.ARKHAM_BATCH_SIMPLE_PAIR === '1';
+}
+
+/** Minimum BTC per **both** legs of a simple pair (default 200). */
+export function getArkhamBatchPairMinBtc(): number {
+  const n = Number(process.env.ARKHAM_BATCH_PAIR_MIN_BTC);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 200;
+}
+
+/**
  * Max age (seconds) of **block time** for a signal to count as "fresh".
  * Default **2h** avoids re-triggering the same morning transfer hours later on refresh (when
  * localStorage is empty or a different origin). For a laptop that sleeps until afternoon, set
