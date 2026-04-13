@@ -102,6 +102,22 @@ export function createPatternDetectedState(setup: PatternSetup): TradeState {
   };
 }
 
+/**
+ * Paper / audit: fill at breakout level (limit-style) instead of the live mark that tick.
+ * Client: `NEXT_PUBLIC_INSIDE_BAR_ENTRY_AT_BREAKOUT=1`. Server tick: `INSIDE_BAR_ENTRY_AT_BREAKOUT=1`.
+ */
+export function insideBarEntryFillPrice(
+  side: 'long' | 'short',
+  setup: PatternSetup,
+  markPrice: number
+): number {
+  const on =
+    process.env.NEXT_PUBLIC_INSIDE_BAR_ENTRY_AT_BREAKOUT === '1' ||
+    process.env.INSIDE_BAR_ENTRY_AT_BREAKOUT === '1';
+  if (!on) return markPrice;
+  return side === 'long' ? setup.breakoutHigh : setup.breakoutLow;
+}
+
 export function enterLong(
   state: TradeState,
   price: number,

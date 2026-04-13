@@ -25,6 +25,12 @@ import {
   shouldRunBirdeyeBackfill,
   trimCurrentIfOverlapsBackfill,
 } from '@/lib/solana-bot/candle-birdeye-backfill';
+import type { Binance1hBar } from '@/lib/solana-bot/binance-spot-ohlc';
+import {
+  fetchBinanceSolUsdClosed1hKlines,
+  getSol60mBinanceMergeMinMs,
+  isSol60mBinanceOhlcMergeEnabled,
+} from '@/lib/solana-bot/binance-spot-ohlc';
 
 export const INSIDE_BAR_UNDERLYINGS: InsideBarUnderlying[] = ['sol', 'btc', 'eth'];
 
@@ -51,6 +57,9 @@ let candleDiskLoaded = false;
 const birdeyeBackfillSucceeded = new Set<string>();
 const birdeyeBackfillLastAttempt = new Map<string, number>();
 const BIRDEYE_BACKFILL_RETRY_MS = 60_000;
+
+let binanceSol1hMergeLastMs = 0;
+let binanceSol1hMergeCache: Binance1hBar[] = [];
 
 function isCandlePersistenceEnabled(): boolean {
   if (process.env.INSIDE_BAR_DISABLE_CANDLE_PERSIST === '1') return false;
@@ -201,6 +210,47 @@ async function maybeBirdeyeBackfill(
   persistCandlesToDisk();
 }
 
+function applyBinanceOverlayToSol60mCompleted(binanceBars: Binance1hBar[]): void {
+  if (binanceBars.length === 0) return;
+  const byStart = new Map(binanceBars.map((b) => [b.unixTime, b]));
+  const k = key('sol', 3600);
+  const completed = completedByKey.get(k);
+  if (!completed || completed.length === 0) return;
+  let changed = false;
+  const next = completed.map((c) => {
+    const b = byStart.get(c.unixTime);
+    if (!b) return c;
+    changed = true;
+    return {
+      ...c,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      volume: 0,
+    };
+  });
+  if (changed) completedByKey.set(k, next);
+}
+
+async function maybeMergeSol60mFromBinance(): Promise<void> {
+  if (!isSol60mBinanceOhlcMergeEnabled()) return;
+  const minMs = getSol60mBinanceMergeMinMs();
+  const nowMs = Date.now();
+  if (nowMs - binanceSol1hMergeLastMs < minMs && binanceSol1hMergeCache.length > 0) {
+    applyBinanceOverlayToSol60mCompleted(binanceSol1hMergeCache);
+    return;
+  }
+  try {
+    const bars = await fetchBinanceSolUsdClosed1hKlines(48);
+    binanceSol1hMergeLastMs = nowMs;
+    binanceSol1hMergeCache = bars;
+    applyBinanceOverlayToSol60mCompleted(bars);
+  } catch {
+    /* Doves-only */
+  }
+}
+
 async function fetchUnderlyingPrice(u: InsideBarUnderlying): Promise<number> {
   if (u === 'sol') {
     const { price } = await fetchDovesPrice();
@@ -262,6 +312,7 @@ export async function advanceCandlesOnce(): Promise<void> {
         }
       }
     }
+    await maybeMergeSol60mFromBinance();
     persistCandlesToDisk();
   } catch {
     /* retry next tick */

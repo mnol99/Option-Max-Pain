@@ -16,6 +16,7 @@ import {
   computeBlkMetrics,
   getEffectiveTpLong,
   getEffectiveTpShort,
+  insideBarEntryFillPrice,
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
   timeWindowSecFromSetup,
   POSITION_MANAGEMENT_SEC,
@@ -1133,10 +1134,11 @@ export default function TradePage() {
             enteringRef.current[sid] = true;
             bc.long = 0;
             bc.short = 0;
-            st = enterLong(st, px, pt);
+            const fillPx = setup ? insideBarEntryFillPrice('long', setup, px) : px;
+            st = enterLong(st, fillPx, pt);
             state[sid] = st;
             if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
-              void executeOnBreakout('long', px, sid);
+              void executeOnBreakout('long', fillPx, sid);
             }
           }
           continue;
@@ -1149,10 +1151,11 @@ export default function TradePage() {
             enteringRef.current[sid] = true;
             bc.long = 0;
             bc.short = 0;
-            st = enterShort(st, px, pt);
+            const fillPx = setup ? insideBarEntryFillPrice('short', setup, px) : px;
+            st = enterShort(st, fillPx, pt);
             state[sid] = st;
             if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
-              void executeOnBreakout('short', px, sid);
+              void executeOnBreakout('short', fillPx, sid);
             }
           }
           continue;

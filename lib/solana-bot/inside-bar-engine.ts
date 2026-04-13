@@ -12,6 +12,7 @@ import {
   checkPositionExit,
   checkReversedExit,
   managementWindowEndFromSetup,
+  insideBarEntryFillPrice,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import type { StrategyTabDef } from '@/lib/solana-bot/strategy-tabs';
@@ -239,7 +240,8 @@ export function applyInsideBarPriceTick(
           refs.entering[sid] = true;
           bc.long = 0;
           bc.short = 0;
-          st = enterLong(st, price, priceTime);
+          const fill = st.setup ? insideBarEntryFillPrice('long', st.setup, price) : price;
+          st = enterLong(st, fill, priceTime);
           state[sid] = st;
         }
         continue;
@@ -252,7 +254,8 @@ export function applyInsideBarPriceTick(
           refs.entering[sid] = true;
           bc.long = 0;
           bc.short = 0;
-          st = enterShort(st, price, priceTime);
+          const fill = st.setup ? insideBarEntryFillPrice('short', st.setup, price) : price;
+          st = enterShort(st, fill, priceTime);
           state[sid] = st;
         }
         continue;
