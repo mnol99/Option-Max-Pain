@@ -13,6 +13,7 @@ import {
   checkReversedExit,
   managementWindowEndFromSetup,
   insideBarEntryFillPrice,
+  wallAwareExitClockSec,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import type { StrategyTabDef } from '@/lib/solana-bot/strategy-tabs';
@@ -219,7 +220,7 @@ export function applyInsideBarPriceTick(
     if (st.status === 'pattern_detected' && st.setup && !refs.entering[sid]) {
       const setup = st.setup;
       const windowEnd = managementWindowEndFromSetup(setup);
-      if (priceTime >= windowEnd) {
+      if (wallAwareExitClockSec(priceTime) >= windowEnd) {
         state[sid] = {
           ...createInitialState(),
           lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,

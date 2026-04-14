@@ -160,6 +160,13 @@ export function newTradeId(): string {
   return `trade-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/**
+ * Time exits must not wait on a stale oracle `publish_time` (e.g. Pyth) behind wall clock.
+ */
+export function wallAwareExitClockSec(oracleTickSec: number): number {
+  return Math.max(oracleTickSec, Math.floor(Date.now() / 1000));
+}
+
 export function checkPositionExit(
   state: TradeState,
   price: number,
@@ -186,8 +193,9 @@ export function checkPositionExit(
     periodEnd: setup.periodEnd,
   };
 
-  // Time exit
-  if (timestamp >= windowEnd) {
+  // Time exit (wall clock so stale Pyth publish_time cannot delay by hours)
+  const exitClock = wallAwareExitClockSec(timestamp);
+  if (exitClock >= windowEnd) {
     const pnl =
       position === 'long' ? price - entryPrice : entryPrice - price;
     const pnlPercent = (pnl / entryPrice) * 100;
@@ -210,7 +218,7 @@ export function checkPositionExit(
           entryPrice,
           entryTime,
           exitPrice: price,
-          exitTime: timestamp,
+          exitTime: exitClock,
           exitReason: 'time',
           liquidationPrice,
           pnl,
@@ -406,7 +414,8 @@ export function checkReversedExit(
   }
 
   // Time exit for reversed position
-  if (timestamp >= windowEnd) {
+  const revExitClock = wallAwareExitClockSec(timestamp);
+  if (revExitClock >= windowEnd) {
     const pnl =
       position === 'long' ? price - entryPrice : entryPrice - price;
     const pnlPercent = (pnl / entryPrice) * 100;
@@ -429,7 +438,7 @@ export function checkReversedExit(
           entryPrice,
           entryTime,
           exitPrice: price,
-          exitTime: timestamp,
+          exitTime: revExitClock,
           exitReason: 'time',
           liquidationPrice,
           pnl,

@@ -1999,8 +1999,13 @@ export default function TradePage() {
                                   <p>
                                     Long triggers when price &gt; ${formatPrice(t.setup.breakoutHigh)}.
                                     Entry ${formatPrice(t.entryPrice)} —{' '}
-                                    {t.entryPrice > t.setup.breakoutHigh ? (
+                                    {t.entryPrice > t.setup.breakoutHigh + 1e-8 ? (
                                       <span className="text-green-600">OK (above breakout)</span>
+                                    ) : Math.abs(t.entryPrice - t.setup.breakoutHigh) <= 1e-6 ? (
+                                      <span className="text-green-600">
+                                        OK (fill at breakout high — e.g. limit-style /{' '}
+                                        <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
+                                      </span>
                                     ) : (
                                       <span className="text-amber-600">Check: entry not above breakout high</span>
                                     )}
@@ -2009,8 +2014,13 @@ export default function TradePage() {
                                   <p>
                                     Short triggers when price &lt; ${formatPrice(t.setup.breakoutLow)}.
                                     Entry ${formatPrice(t.entryPrice)} —{' '}
-                                    {t.entryPrice < t.setup.breakoutLow ? (
+                                    {t.entryPrice < t.setup.breakoutLow - 1e-8 ? (
                                       <span className="text-green-600">OK (below breakout)</span>
+                                    ) : Math.abs(t.entryPrice - t.setup.breakoutLow) <= 1e-6 ? (
+                                      <span className="text-green-600">
+                                        OK (fill at breakout low — e.g. limit-style /{' '}
+                                        <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
+                                      </span>
                                     ) : (
                                       <span className="text-amber-600">Possible false signal: entry not below breakout low</span>
                                     )}
