@@ -1310,8 +1310,10 @@ export default function TradePage() {
               signal is before 10am ET;{' '}
               {BLK_COVER_SLOT_COUNT_AFTERNOON} covers <span className="font-semibold">3:00–3:50 ET</span> if the
               signal is from 10am onward. Long (2nd CB→BR batch): {BLK_LONG_COVER_SLOT_COUNT} sells{' '}
-              <span className="font-semibold">2:00–3:40 ET</span> (within 2:00–3:45 PM); no new long signal after{' '}
-              <span className="font-semibold">2:00 PM ET</span>. Pyth BTC. Signals from{' '}
+              <span className="font-semibold">2:00–3:40 ET</span> (within 2:00–3:45 PM); by default no new long
+              signal after <span className="font-semibold">2:00 PM ET</span> (set server{' '}
+              <code className="text-xs bg-gray-100 px-1">BLK_DISABLE_LONG_BUY_CUTOFF=1</code> to allow longs any
+              time). Pyth BTC. Signals from{' '}
               <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
             </>
           ) : (

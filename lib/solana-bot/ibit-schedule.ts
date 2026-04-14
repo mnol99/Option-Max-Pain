@@ -92,8 +92,14 @@ export function getBlkLongCoverScheduleUtc(anchorUtc: Date): Date[] {
   return slots;
 }
 
-/** True while wall-clock ET is still before the long buy-trigger cutoff (default 2:00 PM). */
+/**
+ * True while wall-clock ET is still before the long buy-trigger cutoff (default 2:00 PM).
+ * Set **`BLK_DISABLE_LONG_BUY_CUTOFF=1`** to allow new CB→BR long signals at any time of day (cover schedule unchanged).
+ */
 export function isBeforeBlkLongBuyTriggerWindowEt(now: Date = new Date()): boolean {
+  if (process.env.BLK_DISABLE_LONG_BUY_CUTOFF === '1') {
+    return true;
+  }
   return getEtMinutesFromMidnight(now) < BLK_LONG_BUY_TRIGGER_CUTOFF_MIN_ET;
 }
 
