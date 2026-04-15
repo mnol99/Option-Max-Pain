@@ -2001,31 +2001,45 @@ export default function TradePage() {
                                   <p>
                                     Long triggers when price &gt; ${formatPrice(t.setup.breakoutHigh)}.
                                     Entry ${formatPrice(t.entryPrice)} —{' '}
-                                    {t.entryPrice > t.setup.breakoutHigh + 1e-8 ? (
-                                      <span className="text-green-600">OK (above breakout)</span>
-                                    ) : Math.abs(t.entryPrice - t.setup.breakoutHigh) <= 1e-6 ? (
-                                      <span className="text-green-600">
-                                        OK (fill at breakout high — e.g. limit-style /{' '}
-                                        <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
-                                      </span>
-                                    ) : (
-                                      <span className="text-amber-600">Check: entry not above breakout high</span>
-                                    )}
+                                    {(() => {
+                                      const bh = t.setup.breakoutHigh;
+                                      const eps = Math.max(0.02, Math.abs(bh) * 1e-9);
+                                      if (t.entryPrice > bh + eps)
+                                        return <span className="text-green-600">OK (above breakout)</span>;
+                                      if (Math.abs(t.entryPrice - bh) <= eps)
+                                        return (
+                                          <span className="text-green-600">
+                                            OK (at / limit-style breakout —{' '}
+                                            <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
+                                          </span>
+                                        );
+                                      return (
+                                        <span className="text-amber-600">Check: entry not above breakout high</span>
+                                      );
+                                    })()}
                                   </p>
                                 ) : (
                                   <p>
                                     Short triggers when price &lt; ${formatPrice(t.setup.breakoutLow)}.
                                     Entry ${formatPrice(t.entryPrice)} —{' '}
-                                    {t.entryPrice < t.setup.breakoutLow - 1e-8 ? (
-                                      <span className="text-green-600">OK (below breakout)</span>
-                                    ) : Math.abs(t.entryPrice - t.setup.breakoutLow) <= 1e-6 ? (
-                                      <span className="text-green-600">
-                                        OK (fill at breakout low — e.g. limit-style /{' '}
-                                        <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
-                                      </span>
-                                    ) : (
-                                      <span className="text-amber-600">Possible false signal: entry not below breakout low</span>
-                                    )}
+                                    {(() => {
+                                      const bl = t.setup.breakoutLow;
+                                      const eps = Math.max(0.02, Math.abs(bl) * 1e-9);
+                                      if (t.entryPrice < bl - eps)
+                                        return <span className="text-green-600">OK (below breakout)</span>;
+                                      if (Math.abs(t.entryPrice - bl) <= eps)
+                                        return (
+                                          <span className="text-green-600">
+                                            OK (at / limit-style breakout —{' '}
+                                            <code className="text-xs">INSIDE_BAR_ENTRY_AT_BREAKOUT</code>)
+                                          </span>
+                                        );
+                                      return (
+                                        <span className="text-amber-600">
+                                          Possible false signal: entry not below breakout low
+                                        </span>
+                                      );
+                                    })()}
                                   </p>
                                 )}
                                 <p className="font-semibold text-gray-700 mt-2">Exit</p>
