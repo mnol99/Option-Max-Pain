@@ -120,6 +120,17 @@ function arkhamHintRelevantSimple(hint: number, pairMinBtc: number): boolean {
   return hint >= Math.max(50, pairMinBtc * 0.75);
 }
 
+/** Arkham may omit `unitValue` or send a string — coerce for pre-filter. */
+function arkhamBtcHint(at: { unitValue?: unknown }): number {
+  const v = at.unitValue;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
 interface SimplePairRow {
   hash: string;
   blockTime: number;
@@ -279,9 +290,9 @@ export async function processArkhamBatchSignals(): Promise<{
   for (const at of outT) {
     const h = arkhamTxHash(at);
     if (!h) continue;
-    const hint = typeof at.unitValue === 'number' ? at.unitValue : 0;
+    const hint = arkhamBtcHint(at);
     const ok = simplePair
-      ? arkhamHintRelevantSimple(hint, pairMinBtc)
+      ? hint <= 0 || arkhamHintRelevantSimple(hint, pairMinBtc)
       : arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin);
     if (!ok) continue;
     outHashSet.add(h);
@@ -292,9 +303,9 @@ export async function processArkhamBatchSignals(): Promise<{
   for (const at of inT) {
     const h = arkhamTxHash(at);
     if (!h) continue;
-    const hint = typeof at.unitValue === 'number' ? at.unitValue : 0;
+    const hint = arkhamBtcHint(at);
     const ok = simplePair
-      ? arkhamHintRelevantSimple(hint, pairMinBtc)
+      ? hint <= 0 || arkhamHintRelevantSimple(hint, pairMinBtc)
       : arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin);
     if (!ok) continue;
     inHashSet.add(h);
