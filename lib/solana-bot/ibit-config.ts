@@ -173,10 +173,10 @@ export function getArkhamTimeLast(): string {
   return '7d';
 }
 
-/** Max Arkham rows per poll (each matching tx still fetches Blockstream for validation). */
+/** Max Arkham rows per poll (each matching tx still fetches Blockstream for validation). Arkham allows up to 100. */
 export function getArkhamTransferLimit(): number {
   const n = Number(process.env.ARKHAM_TRANSFER_LIMIT);
-  if (Number.isFinite(n) && n >= 5 && n <= 50) return Math.floor(n);
+  if (Number.isFinite(n) && n >= 5 && n <= 100) return Math.floor(n);
   return 25;
 }
 

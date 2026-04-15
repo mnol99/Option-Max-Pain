@@ -50,7 +50,8 @@ export async function fetchArkhamBitcoinTransfersForBase(
     q.set('counterparties', params.counterparties.trim());
   }
   q.set('sortKey', 'time');
-  q.set('sortDir', 'asc');
+  /** Newest first — `asc` with a small limit returns **oldest** rows in the window and misses fresh transfers. */
+  q.set('sortDir', 'desc');
   q.set('limit', String(Math.min(100, Math.max(1, params.limit))));
   q.set('timeLast', params.timeLast);
 
