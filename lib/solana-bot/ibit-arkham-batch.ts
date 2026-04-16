@@ -34,7 +34,7 @@ import {
   getCoverScheduleUtc,
   getEtDayKey,
   IBIT_TZ,
-  isBeforeBlkLongBuyTriggerWindowEt,
+  isBlkLongBuyAllowedForBlockTimeEt,
 } from '@/lib/solana-bot/ibit-schedule';
 import type { IbitTransferSignal } from '@/lib/solana-bot/ibit-types';
 import {
@@ -369,19 +369,18 @@ export async function processArkhamBatchSignals(): Promise<{
 
     nextDay.inHashes = inSimple.map((r) => r.hash);
 
-    if (isBeforeBlkLongBuyTriggerWindowEt()) {
-      for (let i = 1; i < inSimple.length; i++) {
-        const prev = inSimple[i - 1]!;
-        const cur = inSimple[i]!;
-        if (prev.btc < pairMinBtc || cur.btc < pairMinBtc) continue;
-        if (nextDay.emittedPairLongStrikerTxid === cur.hash) break;
-        const tx = await fetchTx(cur.hash);
-        const bt = tx?.status?.block_time ?? 0;
-        if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
-        outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
-        nextDay.emittedPairLongStrikerTxid = cur.hash;
-        break;
-      }
+    for (let i = 1; i < inSimple.length; i++) {
+      const prev = inSimple[i - 1]!;
+      const cur = inSimple[i]!;
+      if (prev.btc < pairMinBtc || cur.btc < pairMinBtc) continue;
+      if (nextDay.emittedPairLongStrikerTxid === cur.hash) break;
+      const tx = await fetchTx(cur.hash);
+      const bt = tx?.status?.block_time ?? 0;
+      if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
+      if (!isBlkLongBuyAllowedForBlockTimeEt(bt)) continue;
+      outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
+      nextDay.emittedPairLongStrikerTxid = cur.hash;
+      break;
     }
 
     saveArkhamBatchDayState(nextDay);
@@ -435,23 +434,22 @@ export async function processArkhamBatchSignals(): Promise<{
     break;
   }
 
-  if (isBeforeBlkLongBuyTriggerWindowEt()) {
-    for (let i = 1; i < inRows.length; i++) {
-      const prev = inRows[i - 1]!;
-      const cur = inRows[i]!;
-      if (prev.kind !== 'runup' || cur.kind !== 'striker') continue;
-      if (nextDay.emittedPairLongStrikerTxid === cur.hash) break;
-      const tx = await fetchTx(cur.hash);
-      const bt = tx?.status?.block_time ?? 0;
-      if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
-      outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
-      nextDay.emittedPairLongStrikerTxid = cur.hash;
-      break;
-    }
+  for (let i = 1; i < inRows.length; i++) {
+    const prev = inRows[i - 1]!;
+    const cur = inRows[i]!;
+    if (prev.kind !== 'runup' || cur.kind !== 'striker') continue;
+    if (nextDay.emittedPairLongStrikerTxid === cur.hash) break;
+    const tx = await fetchTx(cur.hash);
+    const bt = tx?.status?.block_time ?? 0;
+    if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
+    if (!isBlkLongBuyAllowedForBlockTimeEt(bt)) continue;
+    outSignals.push(buildSignal(tx, 'second_in_long', mainDeposit, transferBase, cbSpendSet));
+    nextDay.emittedPairLongStrikerTxid = cur.hash;
+    break;
   }
 
   /** Long on 2nd ~300 BTC striker (CB→BR), chronological — e.g. two 300s in a row. */
-  if (isArkhamSecondStrikerLongEnabled() && isBeforeBlkLongBuyTriggerWindowEt()) {
+  if (isArkhamSecondStrikerLongEnabled()) {
     const strikers = inRows.filter((r) => r.kind === 'striker');
     for (let i = 1; i < strikers.length; i++) {
       const cur = strikers[i]!;
@@ -459,6 +457,7 @@ export async function processArkhamBatchSignals(): Promise<{
       const tx = await fetchTx(cur.hash);
       const bt = tx?.status?.block_time ?? 0;
       if (!tx || bt <= 0 || !blockTimeAfterOpenEt(bt, longAfterMin)) continue;
+      if (!isBlkLongBuyAllowedForBlockTimeEt(bt)) continue;
       const dup = outSignals.some((s) => s.txid.toLowerCase() === cur.hash.toLowerCase());
       if (dup) {
         nextDay.emittedSecondStrikerInLongTxid = cur.hash;

@@ -103,6 +103,21 @@ export function isBeforeBlkLongBuyTriggerWindowEt(now: Date = new Date()): boole
   return getEtMinutesFromMidnight(now) < BLK_LONG_BUY_TRIGGER_CUTOFF_MIN_ET;
 }
 
+/**
+ * Whether a **chain** long signal is allowed given **that transfer's** block time in ET.
+ * Uses the same 2pm ET cutoff as wall-clock, but keyed to the tx so a morning CB→BR pair still
+ * emits if the bot polls later in the day (server heartbeat / delayed tab).
+ */
+export function isBlkLongBuyAllowedForBlockTimeEt(blockTimeSec: number): boolean {
+  if (process.env.BLK_DISABLE_LONG_BUY_CUTOFF === '1') {
+    return true;
+  }
+  if (blockTimeSec <= 0) {
+    return isBeforeBlkLongBuyTriggerWindowEt();
+  }
+  return getEtMinutesFromMidnight(new Date(blockTimeSec * 1000)) < BLK_LONG_BUY_TRIGGER_CUTOFF_MIN_ET;
+}
+
 function getEtParts(d: Date): { hour: number; minute: number; second: number } {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: IBIT_TZ,

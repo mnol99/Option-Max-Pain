@@ -35,7 +35,7 @@ import {
   getEtDayStartUnix,
   getEtMinutesFromMidnight,
   IBIT_TZ,
-  isBeforeBlkLongBuyTriggerWindowEt,
+  isBlkLongBuyAllowedForBlockTimeEt,
   isBlockTimeInEtMinuteWindow,
   isWithinArkhamPollWindowEt,
   isWithinSignalWindowEt,
@@ -421,7 +421,7 @@ export async function pollIbitTransfers(): Promise<{
     if (serverSeen.has(s.txid.toLowerCase())) return false;
     if (
       (s.blkArkhamBatchRole === 'second_in_long' || s.blkArkhamBatchRole === 'second_striker_in_long') &&
-      !isBeforeBlkLongBuyTriggerWindowEt()
+      !isBlkLongBuyAllowedForBlockTimeEt(s.blockTime)
     ) {
       return false;
     }
