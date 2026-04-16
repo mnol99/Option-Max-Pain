@@ -16,6 +16,7 @@ import {
   STRATEGY_INTERVALS,
   type StrategyIntervalSec,
   getCandleBoundary,
+  nextBarStartAfter,
   DAILY_BAR_SEC,
 } from './candle-intervals';
 import { getNextEtDaily8pmBarStartUnix } from './ibit-schedule';
@@ -293,11 +294,7 @@ export async function advanceCandlesOnce(): Promise<void> {
         let current = currentByKey.get(k);
         const boundary = getCandleBoundary(now, intervalSec);
 
-        if (!current || current.unixTime !== boundary) {
-          if (current) {
-            completed = rollCandle(completed, current);
-            completedByKey.set(k, completed);
-          }
+        if (!current) {
           currentByKey.set(k, {
             unixTime: boundary,
             open: price,
@@ -305,11 +302,67 @@ export async function advanceCandlesOnce(): Promise<void> {
             low: price,
             close: price,
           });
-        } else {
+          continue;
+        }
+
+        /**
+         * When the process is down for multiple bar periods, a single tick used to advance only
+         * one boundary — skipping intermediate completed bars and breaking pattern detection.
+         * Roll forward hour-by-hour (or daily-by-daily) until we reach `boundary`, synthesizing
+         * flat OHLC for missed periods (last known close) so history stays contiguous.
+         */
+        let rolled = 0;
+        const maxRoll = 512;
+        while (current.unixTime < boundary && rolled < maxRoll) {
+          completed = rollCandle(completed, current);
+          completedByKey.set(k, completed);
+          const nextStart = nextBarStartAfter(current.unixTime, intervalSec);
+          rolled += 1;
+          if (nextStart > boundary) {
+            current = {
+              unixTime: boundary,
+              open: price,
+              high: price,
+              low: price,
+              close: price,
+            };
+            break;
+          }
+          if (nextStart === boundary) {
+            current = {
+              unixTime: boundary,
+              open: price,
+              high: price,
+              low: price,
+              close: price,
+            };
+            break;
+          }
+          const gapClose: number = current.close;
+          current = {
+            unixTime: nextStart,
+            open: gapClose,
+            high: gapClose,
+            low: gapClose,
+            close: gapClose,
+          };
+        }
+
+        if (current.unixTime > boundary || rolled >= maxRoll) {
+          current = {
+            unixTime: boundary,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+          };
+        } else if (current.unixTime === boundary) {
           current.high = Math.max(current.high, price);
           current.low = Math.min(current.low, price);
           current.close = price;
         }
+
+        currentByKey.set(k, current);
       }
     }
     await maybeMergeSol60mFromBinance();

@@ -30,6 +30,17 @@ export function getCandleBoundary(ts: number, intervalSec: number): number {
   return Math.floor(ts / intervalSec) * intervalSec;
 }
 
+/**
+ * Start unix of the bar **after** a completed bar that began at `prevStartUnix`.
+ * Used to backfill skipped boundaries when the process was down for multiple hours/days.
+ */
+export function nextBarStartAfter(prevStartUnix: number, intervalSec: number): number {
+  if (intervalSec === 86400) {
+    return getNextEtDaily8pmBarStartUnix(prevStartUnix);
+  }
+  return prevStartUnix + intervalSec;
+}
+
 /** Bar length for pattern / management window: daily = 86399s (8pm→7:59:59pm ET). */
 export function effectiveBarDurationSec(intervalSec: number): number {
   if (intervalSec === 86400 || intervalSec === DAILY_BAR_SEC) return DAILY_BAR_SEC;

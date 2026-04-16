@@ -1,7 +1,12 @@
 /**
  * Server-side inside-bar simulation: advances on /api/solana-bot/inside-bar/tick
  * so 60m/Daily inside-bar logic keeps running while the browser tab is suspended.
+ *
+ * Optional disk persist (same opt-in as candle JSON) restores paper simulation after `next start`.
  */
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { advanceCandlesOnce, getCandles, getWarmupMinutes } from '@/lib/solana-bot/candle-aggregator';
 import { fetchPythPrice, fetchPythBtcPrice, fetchPythEthPrice } from '@/lib/solana-bot/pyth-price';
@@ -37,6 +42,84 @@ let serverState: InsideBarServerSnapshot & { lastTickAt: number } = {
   tradesByStrategy: Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, [] as ClosedTrade[]])),
   lastTickAt: 0,
 };
+
+let serverPaperStateLoaded = false;
+
+function isServerStatePersistenceEnabled(): boolean {
+  if (process.env.INSIDE_BAR_DISABLE_SERVER_STATE_PERSIST === '1') return false;
+  if (process.env.INSIDE_BAR_SERVER_STATE_PATH?.trim()) return true;
+  if (process.env.INSIDE_BAR_CANDLES_PERSIST_PATH?.trim()) return true;
+  return process.env.NODE_ENV === 'development';
+}
+
+function getServerStatePersistencePath(): string {
+  const raw = process.env.INSIDE_BAR_SERVER_STATE_PATH?.trim();
+  if (raw) return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+  return path.join(process.cwd(), '.data', 'inside-bar-server-paper.json');
+}
+
+interface ServerPaperPersistPayload extends InsideBarServerSnapshot {
+  v: 1;
+  savedAt: number;
+  lastTickAt: number;
+}
+
+function loadServerPaperStateFromDiskOnce(): void {
+  if (serverPaperStateLoaded || !isServerStatePersistenceEnabled()) return;
+  serverPaperStateLoaded = true;
+  const file = getServerStatePersistencePath();
+  try {
+    if (!fs.existsSync(file)) return;
+    const raw = fs.readFileSync(file, 'utf8');
+    const p = JSON.parse(raw) as ServerPaperPersistPayload;
+    if (p.v !== 1 || !p.stateByStrategy) return;
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      const st = p.stateByStrategy[s.id];
+      if (st && typeof st === 'object' && 'status' in st) {
+        serverState.stateByStrategy[s.id] = st as TradeState;
+      }
+      if (typeof p.entering?.[s.id] === 'boolean') {
+        serverState.entering[s.id] = p.entering[s.id]!;
+      }
+      const b = p.breakout?.[s.id];
+      if (b && typeof b.long === 'number' && typeof b.short === 'number') {
+        serverState.breakout[s.id] = { long: b.long, short: b.short };
+      }
+      const tr = p.tradesByStrategy?.[s.id];
+      if (Array.isArray(tr)) {
+        serverState.tradesByStrategy[s.id] = tr as ClosedTrade[];
+      }
+    }
+    if (typeof p.lastTickAt === 'number' && p.lastTickAt > 0) {
+      serverState.lastTickAt = p.lastTickAt;
+    }
+  } catch {
+    /* corrupt or missing */
+  }
+}
+
+function persistServerPaperStateToDisk(): void {
+  if (!isServerStatePersistenceEnabled()) return;
+  try {
+    const file = getServerStatePersistencePath();
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const payload: ServerPaperPersistPayload = {
+      v: 1,
+      savedAt: Date.now(),
+      lastTickAt: serverState.lastTickAt,
+      stateByStrategy: { ...serverState.stateByStrategy },
+      entering: { ...serverState.entering },
+      breakout: { ...serverState.breakout },
+      tradesByStrategy: { ...serverState.tradesByStrategy },
+    };
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8');
+    fs.renameSync(tmp, file);
+  } catch {
+    /* read-only fs */
+  }
+}
 
 function mergeClientSnapshot(snap: Partial<InsideBarServerSnapshot>): void {
   if (snap.stateByStrategy) {
@@ -128,6 +211,7 @@ export async function tickInsideBarServer(
   newTrades: Record<string, ClosedTrade[]>;
   warmupByStrategy: Record<string, number>;
 }> {
+  loadServerPaperStateFromDiskOnce();
   if (clientSnapshot) {
     mergeClientSnapshot(clientSnapshot);
   }
@@ -210,6 +294,8 @@ export async function tickInsideBarServer(
   for (const s of INSIDE_BAR_STRATEGIES) {
     warmupByStrategy[s.id] = getWarmupMinutes(strategyUnderlying(s), s.intervalSec);
   }
+
+  persistServerPaperStateToDisk();
 
   return {
     snapshot: serverState,
