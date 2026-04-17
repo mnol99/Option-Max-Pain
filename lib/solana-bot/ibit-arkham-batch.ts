@@ -25,6 +25,7 @@ import {
   getArkhamTimeLast,
   getArkhamTransferBase,
   getArkhamTransferLimit,
+  getIbitExtraTxids,
   getIbitMainDepositAddress,
   isArkhamBatchSimplePairEnabled,
   isArkhamSecondStrikerLongEnabled,
@@ -309,6 +310,32 @@ export async function processArkhamBatchSignals(): Promise<{
       : arkhamHintRelevant(hint, target, broadTol, strikerTol, runMin);
     if (!ok) continue;
     inHashSet.add(h);
+  }
+
+  /**
+   * Arkham sometimes omits txs that still match on-chain (same block batch, labeling lag).
+   * `IBIT_EXTRA_TXIDS` merges into batch sets after Blockstream validation.
+   */
+  for (const raw of getIbitExtraTxids()) {
+    const h = raw.toLowerCase();
+    if (outHashSet.has(h) || inHashSet.has(h)) continue;
+    if (simplePair) {
+      const mOut = await measureBrToCbBtc(h, mainDeposit);
+      if (mOut && mOut.row.btc >= pairMinBtc) {
+        outHashSet.add(h);
+        continue;
+      }
+      const mIn = await measureCbToBrBtc(h, cbSpendSet);
+      if (mIn && mIn.row.btc >= pairMinBtc) inHashSet.add(h);
+    } else {
+      const outRow = await classifyOutHash(h, mainDeposit, target, strikerTol, broadTol, runMin);
+      if (outRow) {
+        outHashSet.add(h);
+        continue;
+      }
+      const inRow = await classifyInHash(h, cbSpendSet, target, strikerTol, broadTol, runMin);
+      if (inRow) inHashSet.add(h);
+    }
   }
 
   const outSignals: IbitTransferSignal[] = [];
