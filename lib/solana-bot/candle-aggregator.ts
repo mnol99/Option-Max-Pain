@@ -28,9 +28,11 @@ import {
 } from '@/lib/solana-bot/candle-birdeye-backfill';
 import type { Binance1hBar } from '@/lib/solana-bot/binance-spot-ohlc';
 import {
-  fetchBinanceSolUsdClosed1hKlines,
-  getSol60mBinanceMergeMinMs,
+  fetchBinanceUsdtClosed1hKlines,
+  getBinance60mMergeMinMs,
   isSol60mBinanceOhlcMergeEnabled,
+  isEth60mBinanceOhlcMergeEnabled,
+  isBtc60mBinanceOhlcMergeEnabled,
 } from '@/lib/solana-bot/binance-spot-ohlc';
 
 export const INSIDE_BAR_UNDERLYINGS: InsideBarUnderlying[] = ['sol', 'btc', 'eth'];
@@ -59,8 +61,8 @@ const birdeyeBackfillSucceeded = new Set<string>();
 const birdeyeBackfillLastAttempt = new Map<string, number>();
 const BIRDEYE_BACKFILL_RETRY_MS = 60_000;
 
-let binanceSol1hMergeLastMs = 0;
-let binanceSol1hMergeCache: Binance1hBar[] = [];
+let binance60mMergeLastMs = 0;
+let binance60mCache: Partial<Record<'sol' | 'eth' | 'btc', Binance1hBar[]>> = {};
 
 function isCandlePersistenceEnabled(): boolean {
   if (process.env.INSIDE_BAR_DISABLE_CANDLE_PERSIST === '1') return false;
@@ -211,10 +213,13 @@ async function maybeBirdeyeBackfill(
   persistCandlesToDisk();
 }
 
-function applyBinanceOverlayToSol60mCompleted(binanceBars: Binance1hBar[]): void {
+function applyBinanceOverlayToUnderlying60mCompleted(
+  u: 'sol' | 'eth' | 'btc',
+  binanceBars: Binance1hBar[]
+): void {
   if (binanceBars.length === 0) return;
   const byStart = new Map(binanceBars.map((b) => [b.unixTime, b]));
-  const k = key('sol', 3600);
+  const k = key(u, 3600);
   const completed = completedByKey.get(k);
   if (!completed || completed.length === 0) return;
   let changed = false;
@@ -234,21 +239,59 @@ function applyBinanceOverlayToSol60mCompleted(binanceBars: Binance1hBar[]): void
   if (changed) completedByKey.set(k, next);
 }
 
-async function maybeMergeSol60mFromBinance(): Promise<void> {
-  if (!isSol60mBinanceOhlcMergeEnabled()) return;
-  const minMs = getSol60mBinanceMergeMinMs();
+/**
+ * Replace flat / gap-filled 60m bars with Binance spot 1h OHLC (USDT) for enabled underlyings.
+ */
+async function maybeMerge60mFromBinance(): Promise<void> {
+  const sol = isSol60mBinanceOhlcMergeEnabled();
+  const eth = isEth60mBinanceOhlcMergeEnabled();
+  const btc = isBtc60mBinanceOhlcMergeEnabled();
+  if (!sol && !eth && !btc) return;
+
+  const minMs = getBinance60mMergeMinMs();
   const nowMs = Date.now();
-  if (nowMs - binanceSol1hMergeLastMs < minMs && binanceSol1hMergeCache.length > 0) {
-    applyBinanceOverlayToSol60mCompleted(binanceSol1hMergeCache);
+  const cacheWarm =
+    (!sol || (binance60mCache.sol?.length ?? 0) > 0) &&
+    (!eth || (binance60mCache.eth?.length ?? 0) > 0) &&
+    (!btc || (binance60mCache.btc?.length ?? 0) > 0);
+
+  if (nowMs - binance60mMergeLastMs < minMs && cacheWarm) {
+    if (sol) applyBinanceOverlayToUnderlying60mCompleted('sol', binance60mCache.sol!);
+    if (eth) applyBinanceOverlayToUnderlying60mCompleted('eth', binance60mCache.eth!);
+    if (btc) applyBinanceOverlayToUnderlying60mCompleted('btc', binance60mCache.btc!);
     return;
   }
+
   try {
-    const bars = await fetchBinanceSolUsdClosed1hKlines(48);
-    binanceSol1hMergeLastMs = nowMs;
-    binanceSol1hMergeCache = bars;
-    applyBinanceOverlayToSol60mCompleted(bars);
+    const tasks: Promise<void>[] = [];
+    if (sol) {
+      tasks.push(
+        fetchBinanceUsdtClosed1hKlines('SOLUSDT', 48).then((bars) => {
+          binance60mCache.sol = bars;
+        })
+      );
+    }
+    if (eth) {
+      tasks.push(
+        fetchBinanceUsdtClosed1hKlines('ETHUSDT', 48).then((bars) => {
+          binance60mCache.eth = bars;
+        })
+      );
+    }
+    if (btc) {
+      tasks.push(
+        fetchBinanceUsdtClosed1hKlines('BTCUSDT', 48).then((bars) => {
+          binance60mCache.btc = bars;
+        })
+      );
+    }
+    await Promise.all(tasks);
+    binance60mMergeLastMs = nowMs;
+    if (sol) applyBinanceOverlayToUnderlying60mCompleted('sol', binance60mCache.sol ?? []);
+    if (eth) applyBinanceOverlayToUnderlying60mCompleted('eth', binance60mCache.eth ?? []);
+    if (btc) applyBinanceOverlayToUnderlying60mCompleted('btc', binance60mCache.btc ?? []);
   } catch {
-    /* Doves-only */
+    /* Pyth-only */
   }
 }
 
@@ -365,7 +408,7 @@ export async function advanceCandlesOnce(): Promise<void> {
         currentByKey.set(k, current);
       }
     }
-    await maybeMergeSol60mFromBinance();
+    await maybeMerge60mFromBinance();
     persistCandlesToDisk();
   } catch {
     /* retry next tick */

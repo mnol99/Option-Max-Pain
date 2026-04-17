@@ -1,5 +1,5 @@
 /**
- * Binance spot SOL/USDT 1h klines — aligns bot 60m SOL candles with major CEX prints (MEXC/Binance/Bybit are typically very close).
+ * Binance spot 1h klines — aligns bot 60m candles with major CEX prints (SOL/ETH/BTC USDT).
  * Public API, no key. Only **closed** hours are merged (in-progress bar skipped for replacement).
  */
 
@@ -11,21 +11,39 @@ export interface Binance1hBar {
   close: number;
 }
 
+export type BinanceSpotUsdtSymbol = 'SOLUSDT' | 'ETHUSDT' | 'BTCUSDT';
+
 export function isSol60mBinanceOhlcMergeEnabled(): boolean {
   return process.env.SOL_60M_MERGE_BINANCE_OHLC === '1';
 }
 
+export function isEth60mBinanceOhlcMergeEnabled(): boolean {
+  return process.env.ETH_60M_MERGE_BINANCE_OHLC === '1';
+}
+
+export function isBtc60mBinanceOhlcMergeEnabled(): boolean {
+  return process.env.BTC_60M_MERGE_BINANCE_OHLC === '1';
+}
+
 /** Min interval between merge network calls (advanceCandlesOnce may run every few seconds). */
-export function getSol60mBinanceMergeMinMs(): number {
-  const n = Number(process.env.SOL_60M_BINANCE_MERGE_INTERVAL_MS);
+export function getBinance60mMergeMinMs(): number {
+  const n = Number(process.env.BINANCE_60M_MERGE_INTERVAL_MS ?? process.env.SOL_60M_BINANCE_MERGE_INTERVAL_MS);
   if (Number.isFinite(n) && n >= 15_000) return Math.floor(n);
   return 60_000;
 }
 
-export async function fetchBinanceSolUsdClosed1hKlines(limit = 48): Promise<Binance1hBar[]> {
-  const url = `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&limit=${limit}`;
+/** @deprecated use getBinance60mMergeMinMs */
+export function getSol60mBinanceMergeMinMs(): number {
+  return getBinance60mMergeMinMs();
+}
+
+export async function fetchBinanceUsdtClosed1hKlines(
+  symbol: BinanceSpotUsdtSymbol,
+  limit = 48
+): Promise<Binance1hBar[]> {
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=${limit}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Binance klines ${res.status}`);
+  if (!res.ok) throw new Error(`Binance klines ${symbol} ${res.status}`);
   const data = (await res.json()) as unknown[];
   if (!Array.isArray(data)) return [];
   const nowSec = Math.floor(Date.now() / 1000);
@@ -44,4 +62,8 @@ export async function fetchBinanceSolUsdClosed1hKlines(limit = 48): Promise<Bina
     out.push({ unixTime, open, high, low, close });
   }
   return out;
+}
+
+export async function fetchBinanceSolUsdClosed1hKlines(limit = 48): Promise<Binance1hBar[]> {
+  return fetchBinanceUsdtClosed1hKlines('SOLUSDT', limit);
 }
