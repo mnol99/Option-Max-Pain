@@ -80,6 +80,22 @@ function formatTime(ts: number): string {
   });
 }
 
+/** Daily bars all *open* at 8pm ET — time-only labels repeat; include ET date. */
+function formatCandleTableTime(ts: number, intervalSec: number): string {
+  if (intervalSec === 86400) {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(ts * 1000));
+  }
+  return formatTime(ts);
+}
+
 /** Daily bars are ~24h ET each; raw "minutes" looks like a bug (e.g. 4974). */
 function formatWarmupEstimate(intervalSec: number, warmupMinutes: number): string {
   if (intervalSec !== 86400) {
@@ -2110,7 +2126,9 @@ export default function TradePage() {
                     <table className="w-full">
                       <thead>
                         <tr className="text-left text-gray-600">
-                          <th className="py-1 pr-2">Time</th>
+                          <th className="py-1 pr-2">
+                            {activeIntervalSec === 86400 ? 'Bar open (ET)' : 'Time'}
+                          </th>
                           <th className="py-1 pr-2">O</th>
                           <th className="py-1 pr-2">H</th>
                           <th className="py-1 pr-2">L</th>
@@ -2120,7 +2138,9 @@ export default function TradePage() {
                       <tbody>
                         {candles.slice(0, 6).map((c, i) => (
                           <tr key={c.unixTime || i} className="border-t border-gray-100">
-                            <td className="py-1 pr-2 font-mono">{formatTime(c.unixTime)}</td>
+                            <td className="py-1 pr-2 font-mono">
+                              {formatCandleTableTime(c.unixTime, activeIntervalSec)}
+                            </td>
                             <td className="py-1 pr-2 font-mono">{formatPrice(c.open)}</td>
                             <td className="py-1 pr-2 font-mono">{formatPrice(c.high)}</td>
                             <td className="py-1 pr-2 font-mono">{formatPrice(c.low)}</td>
