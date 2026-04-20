@@ -1,9 +1,10 @@
 /**
  * Jupiter Perps execution API
- * Builds createIncreasePositionMarketRequest tx for client to sign & send.
+ * Builds createIncreasePositionMarketRequest tx for client to sign & send,
+ * or optionally signs and sends server-side (SOLANA_TRADING_SERVER_SIGNING=1).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, sendAndConfirmRawTransaction } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
 import {
   ComputeBudgetProgram,
@@ -34,6 +35,10 @@ import {
   getPositionRequestPda,
   getPerpetualsPda,
 } from '@/lib/solana-bot/jupiter-perps';
+import {
+  getServerTradingKeypair,
+  isServerTradingSigningEnabled,
+} from '@/lib/solana-bot/trading-wallet';
 
 import type { Idl } from '@coral-xyz/anchor';
 import minimalIdl from '@/lib/solana-bot/idl/jupiter-perps-minimal.json';
@@ -54,24 +59,67 @@ export async function POST(req: NextRequest) {
       solPrice,
       btcPrice,
       asset = 'sol',
+      signAndSend = false,
     } = body as {
       side: 'long' | 'short';
-      owner: string;
+      owner?: string;
       sizeUsd?: number;
       leverage?: number;
       solPrice?: number;
       btcPrice?: number;
       asset?: 'sol' | 'btc';
+      signAndSend?: boolean;
     };
 
-    if (!ownerStr || !side || !['long', 'short'].includes(side)) {
+    if (!side || !['long', 'short'].includes(side)) {
       return NextResponse.json(
-        { success: false, error: 'Invalid body: need side (long|short) and owner (pubkey)' },
+        { success: false, error: 'Invalid body: need side (long|short)' },
         { status: 400 }
       );
     }
 
-    const owner = new PublicKey(ownerStr);
+    let owner: PublicKey;
+    let serverKeypair = null as ReturnType<typeof getServerTradingKeypair>;
+
+    if (signAndSend === true) {
+      if (!isServerTradingSigningEnabled()) {
+        return NextResponse.json(
+          { success: false, error: 'Server signing disabled (set SOLANA_TRADING_SERVER_SIGNING=1)' },
+          { status: 403 }
+        );
+      }
+      try {
+        serverKeypair = getServerTradingKeypair();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return NextResponse.json({ success: false, error: msg }, { status: 500 });
+      }
+      if (!serverKeypair) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'Server signing enabled but no key: set SOLANA_TRADING_WALLET_KEYPAIR or SOLANA_TRADING_WALLET_SECRET_BASE64',
+          },
+          { status: 500 }
+        );
+      }
+      owner = serverKeypair.publicKey;
+      if (ownerStr && ownerStr !== owner.toBase58()) {
+        return NextResponse.json(
+          { success: false, error: 'owner pubkey does not match server trading wallet' },
+          { status: 403 }
+        );
+      }
+    } else {
+      if (!ownerStr) {
+        return NextResponse.json(
+          { success: false, error: 'Invalid body: need owner (pubkey) when signAndSend is false' },
+          { status: 400 }
+        );
+      }
+      owner = new PublicKey(ownerStr);
+    }
     const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
     const connection = new Connection(rpcUrl);
 
@@ -216,6 +264,20 @@ export async function POST(req: NextRequest) {
     }).compileToV0Message();
 
     const tx = new VersionedTransaction(txMessage);
+
+    if (signAndSend === true && serverKeypair) {
+      tx.sign([serverKeypair]);
+      const raw = tx.serialize();
+      const sig = await sendAndConfirmRawTransaction(connection, Buffer.from(raw), {
+        commitment: 'confirmed',
+        skipPreflight: false,
+      });
+      return NextResponse.json({
+        success: true,
+        data: { signature: sig, owner: owner.toBase58() },
+      });
+    }
+
     const serialized = Buffer.from(tx.serialize()).toString('base64');
     return NextResponse.json({ success: true, data: { serializedTx: serialized } });
   } catch (err) {
