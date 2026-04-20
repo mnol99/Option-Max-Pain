@@ -27,9 +27,11 @@ import {
   JUPITER_PERPETUALS_EVENT_AUTHORITY,
   JLP_POOL_ACCOUNT_PUBKEY,
   CUSTODY_SOL,
+  CUSTODY_ETH,
   CUSTODY_BTC,
   CUSTODY_USDC,
   USDC_MINT,
+  WETH_MINT,
   WBTC_MINT,
   getPositionPda,
   getPositionRequestPda,
@@ -47,6 +49,7 @@ const USD_SCALE = 1_000_000;
 const USDC_DECIMALS = 6;
 const SOL_DECIMALS = 9;
 const WBTC_DECIMALS = 8;
+const WETH_DECIMALS = 8;
 
 export async function POST(req: NextRequest) {
   try {
@@ -58,6 +61,7 @@ export async function POST(req: NextRequest) {
       leverage = 1.5,
       solPrice,
       btcPrice,
+      ethPrice,
       asset = 'sol',
       signAndSend = false,
     } = body as {
@@ -67,7 +71,8 @@ export async function POST(req: NextRequest) {
       leverage?: number;
       solPrice?: number;
       btcPrice?: number;
-      asset?: 'sol' | 'btc';
+      ethPrice?: number;
+      asset?: 'sol' | 'btc' | 'eth';
       signAndSend?: boolean;
     };
 
@@ -135,11 +140,24 @@ export async function POST(req: NextRequest) {
     );
 
     const useBtc = asset === 'btc';
-    const custody = useBtc ? CUSTODY_BTC : CUSTODY_SOL;
+    const useEth = asset === 'eth';
+    const custody = useEth ? CUSTODY_ETH : useBtc ? CUSTODY_BTC : CUSTODY_SOL;
     const collateralCustody =
-      side === 'short' ? CUSTODY_USDC : useBtc ? CUSTODY_BTC : CUSTODY_SOL;
+      side === 'short'
+        ? CUSTODY_USDC
+        : useBtc
+          ? CUSTODY_BTC
+          : useEth
+            ? CUSTODY_ETH
+            : CUSTODY_SOL;
     const inputMint =
-      side === 'short' ? USDC_MINT : useBtc ? WBTC_MINT : NATIVE_MINT;
+      side === 'short'
+        ? USDC_MINT
+        : useBtc
+          ? WBTC_MINT
+          : useEth
+            ? WETH_MINT
+            : NATIVE_MINT;
 
     const position = getPositionPda(owner, custody, collateralCustody, side);
     const counter = BigInt(Math.floor(Math.random() * 1_000_000_000));
@@ -169,6 +187,17 @@ export async function POST(req: NextRequest) {
       const collateralBtc = collateralUsd / btcPrice;
       collateralTokenDelta = new BN(
         Math.floor(collateralBtc * Math.pow(10, WBTC_DECIMALS))
+      );
+    } else if (useEth) {
+      if (!ethPrice || ethPrice <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'ethPrice required for long ETH positions' },
+          { status: 400 }
+        );
+      }
+      const collateralWeth = collateralUsd / ethPrice;
+      collateralTokenDelta = new BN(
+        Math.floor(collateralWeth * Math.pow(10, WETH_DECIMALS))
       );
     } else {
       if (!solPrice || solPrice <= 0) {
@@ -208,13 +237,13 @@ export async function POST(req: NextRequest) {
       postInstructions.push(
         createCloseAccountInstruction(fundingAccount, owner, owner)
       );
-    } else if (inputMint.equals(WBTC_MINT)) {
+    } else if (inputMint.equals(WBTC_MINT) || inputMint.equals(WETH_MINT)) {
       preInstructions.push(
         createAssociatedTokenAccountIdempotentInstruction(
           owner,
           fundingAccount,
           owner,
-          WBTC_MINT
+          inputMint
         )
       );
     }

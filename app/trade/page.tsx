@@ -623,7 +623,8 @@ export default function TradePage() {
                   leverage,
                   solPrice: asset === 'sol' ? markPrice : undefined,
                   btcPrice: asset === 'btc' ? markPrice : undefined,
-                  asset: asset === 'btc' ? 'btc' : 'sol',
+                  ethPrice: asset === 'eth' ? markPrice : undefined,
+                  asset: asset === 'btc' ? 'btc' : asset === 'eth' ? 'eth' : 'sol',
                 }
               : {
                   side,
@@ -632,7 +633,8 @@ export default function TradePage() {
                   leverage,
                   solPrice: asset === 'sol' ? markPrice : undefined,
                   btcPrice: asset === 'btc' ? markPrice : undefined,
-                  asset: asset === 'btc' ? 'btc' : 'sol',
+                  ethPrice: asset === 'eth' ? markPrice : undefined,
+                  asset: asset === 'btc' ? 'btc' : asset === 'eth' ? 'eth' : 'sol',
                 }
           ),
         });
@@ -1196,7 +1198,11 @@ export default function TradePage() {
             const fillPx = setup ? insideBarEntryFillPrice('long', setup, px) : px;
             st = enterLong(st, fillPx, pt);
             state[sid] = st;
-            if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && (asset === 'sol' || asset === 'btc')) {
+            if (
+              liveMode &&
+              (SERVER_TRADING_AUTOSIGN || connected) &&
+              (asset === 'sol' || asset === 'btc' || asset === 'eth')
+            ) {
               void executeOnBreakout('long', fillPx, sid);
             }
           }
@@ -1213,7 +1219,11 @@ export default function TradePage() {
             const fillPx = setup ? insideBarEntryFillPrice('short', setup, px) : px;
             st = enterShort(st, fillPx, pt);
             state[sid] = st;
-            if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && (asset === 'sol' || asset === 'btc')) {
+            if (
+              liveMode &&
+              (SERVER_TRADING_AUTOSIGN || connected) &&
+              (asset === 'sol' || asset === 'btc' || asset === 'eth')
+            ) {
               void executeOnBreakout('short', fillPx, sid);
             }
           }
@@ -1383,8 +1393,8 @@ export default function TradePage() {
               and performance (${paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar
               logic runs on the server every few seconds.{' '}
               <span className="font-medium">60m</span> tabs pause Fri 5pm–Sun 3pm ET (flatten open);{' '}
-              <span className="font-medium">Daily</span> tabs run continuously. Live auto-execution: SOL +
-              WBTC perps only (ETH tabs = paper until wired).
+              <span className="font-medium">Daily</span> tabs run continuously. Live auto-execution: Jupiter
+              perps for SOL (native collateral), BTC (WBTC), and ETH (WETH); shorts use USDC.
             </>
           )}
         </p>
