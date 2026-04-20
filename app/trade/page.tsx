@@ -21,6 +21,7 @@ import {
   timeWindowSecFromSetup,
   POSITION_MANAGEMENT_SEC,
   managementWindowEndFromClosedTradeSetup,
+  wallAwareExitClockSec,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import {
@@ -1151,7 +1152,10 @@ export default function TradePage() {
       const { price: px, time: pt } = mv;
       const asset = strategyUnderlying(s);
 
-      if (s.intervalSec === 3600 && isWeekendHalt60mEt(new Date(pt * 1000))) {
+      if (
+        s.intervalSec === 3600 &&
+        isWeekendHalt60mEt(new Date(wallAwareExitClockSec(pt) * 1000))
+      ) {
         if (st.status === 'in_position') {
           const r = checkPositionExit({ ...st, windowEnd: pt - 1 }, px, pt);
           state[sid] = r.newState;

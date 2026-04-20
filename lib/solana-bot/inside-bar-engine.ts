@@ -66,6 +66,27 @@ export function applyInsideBarPatternFromCandles(
     /** Read from initial snapshot only (same as client useEffect). */
     const st = prev[s.id];
     if (!st) continue;
+
+    /**
+     * 60m: no arming patterns during Fri≥5pm–Sun&lt;3pm ET (wall clock). Otherwise candle catch-up
+     * can detect setups on weekend bars and the next tick (after reopen) enters on stale oracle time.
+     */
+    if (s.intervalSec === 3600 && isWeekendHalt60mEt(new Date(nowSec * 1000))) {
+      if (st.status === 'pattern_detected') {
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[s.id] = {
+          ...createInitialState(),
+          lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+        };
+        refs.entering[s.id] = false;
+        refs.breakout[s.id] = { long: 0, short: 0 };
+      }
+      continue;
+    }
+
     if (st.status !== 'idle' && st.status !== 'stopped' && st.status !== 'pattern_detected')
       continue;
 
@@ -218,8 +239,14 @@ export function applyInsideBarPriceTick(
     const priceTime = priceTimeByStrategyId[sid];
     if (price == null || priceTime == null) continue;
 
-    /** 60m only: Fri ≥5pm ET → Sun &lt;3pm ET — no new trades; flatten open legs. Daily (tf1d) always runs. */
-    if (s.intervalSec === 3600 && isWeekendHalt60mEt(new Date(priceTime * 1000))) {
+    /**
+     * 60m only: Fri ≥5pm ET → Sun &lt;3pm ET — no new trades; flatten open legs.
+     * Use max(oracle, wall) so a stale Pyth timestamp does not skip the halt window.
+     */
+    if (
+      s.intervalSec === 3600 &&
+      isWeekendHalt60mEt(new Date(wallAwareExitClockSec(priceTime) * 1000))
+    ) {
       if (st.status === 'in_position') {
         const r = checkPositionExit({ ...st, windowEnd: priceTime - 1 }, price, priceTime);
         state[sid] = r.newState;
