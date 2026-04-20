@@ -6,6 +6,7 @@
  */
 
 import {
+  fetchBlockTxids,
   fetchTx,
   maxOutputSatsExcludingAddresses,
   sumFromAddressesAsInput,
@@ -136,6 +137,9 @@ interface SimplePairRow {
   hash: string;
   blockTime: number;
   btc: number;
+  /** Present when confirmed — used to sort same-`blockTime` legs by merkle order */
+  blockHash?: string;
+  blockOrderIndex?: number;
 }
 
 async function measureBrToCbBtc(
@@ -146,7 +150,9 @@ async function measureBrToCbBtc(
   if (!tx) return null;
   const btc = sumToAddress(tx, mainDeposit) / 1e8;
   const bt = tx.status?.block_time ?? 0;
-  return { row: { hash: h, blockTime: bt, btc } };
+  const blockHash =
+    tx.status?.confirmed && tx.status?.block_hash ? String(tx.status.block_hash) : undefined;
+  return { row: { hash: h, blockTime: bt, btc, ...(blockHash ? { blockHash } : {}) } };
 }
 
 async function measureCbToBrBtc(
@@ -157,7 +163,43 @@ async function measureCbToBrBtc(
   if (!tx) return null;
   const btc = maxOutputSatsExcludingAddresses(tx, cbSpendExclude) / 1e8;
   const bt = tx.status?.block_time ?? 0;
-  return { row: { hash: h, blockTime: bt, btc } };
+  const blockHash =
+    tx.status?.confirmed && tx.status?.block_hash ? String(tx.status.block_hash) : undefined;
+  return { row: { hash: h, blockTime: bt, btc, ...(blockHash ? { blockHash } : {}) } };
+}
+
+/** Same-second batch legs: lexicographic txid order is wrong; use block merkle index from Esplora. */
+async function assignBlockOrderIndices(rows: SimplePairRow[]): Promise<void> {
+  const byBlock = new Map<string, SimplePairRow[]>();
+  for (const r of rows) {
+    if (!r.blockHash || r.blockTime <= 0) continue;
+    const list = byBlock.get(r.blockHash) ?? [];
+    list.push(r);
+    byBlock.set(r.blockHash, list);
+  }
+  for (const [bh, list] of Array.from(byBlock.entries())) {
+    if (list.length <= 1) continue;
+    const txids = await fetchBlockTxids(bh);
+    if (!txids?.length) continue;
+    const idx = new Map<string, number>();
+    for (let i = 0; i < txids.length; i++) {
+      idx.set(txids[i]!.toLowerCase(), i);
+    }
+    for (const r of list) {
+      const i = idx.get(r.hash.toLowerCase());
+      if (i != null) r.blockOrderIndex = i;
+    }
+  }
+}
+
+function sortSimplePairRows(rows: SimplePairRow[]): void {
+  rows.sort((a, b) => {
+    if (a.blockTime !== b.blockTime) return a.blockTime - b.blockTime;
+    const ia = a.blockOrderIndex;
+    const ib = b.blockOrderIndex;
+    if (ia != null && ib != null && ia !== ib) return ia - ib;
+    return a.hash.localeCompare(b.hash);
+  });
 }
 
 function buildSignal(
@@ -201,6 +243,8 @@ interface ClassifiedRow {
   hash: string;
   blockTime: number;
   kind: LegKind;
+  blockHash?: string;
+  blockOrderIndex?: number;
 }
 
 async function classifyOutHash(
@@ -216,7 +260,9 @@ async function classifyOutHash(
   const kind = classifyBrToCb(tx, mainDeposit, target, strikerTol, broadTol, runMin);
   if (!kind) return null;
   const bt = tx.status?.block_time ?? 0;
-  return { hash: h, blockTime: bt, kind };
+  const blockHash =
+    tx.status?.confirmed && tx.status?.block_hash ? String(tx.status.block_hash) : undefined;
+  return { hash: h, blockTime: bt, kind, ...(blockHash ? { blockHash } : {}) };
 }
 
 async function classifyInHash(
@@ -232,7 +278,32 @@ async function classifyInHash(
   const kind = classifyCbToBr(tx, cbSpendExclude, target, strikerTol, broadTol, runMin);
   if (!kind) return null;
   const bt = tx.status?.block_time ?? 0;
-  return { hash: h, blockTime: bt, kind };
+  const blockHash =
+    tx.status?.confirmed && tx.status?.block_hash ? String(tx.status.block_hash) : undefined;
+  return { hash: h, blockTime: bt, kind, ...(blockHash ? { blockHash } : {}) };
+}
+
+async function assignClassifiedBlockOrderIndices(rows: ClassifiedRow[]): Promise<void> {
+  const byBlock = new Map<string, ClassifiedRow[]>();
+  for (const r of rows) {
+    if (!r.blockHash || r.blockTime <= 0) continue;
+    const list = byBlock.get(r.blockHash) ?? [];
+    list.push(r);
+    byBlock.set(r.blockHash, list);
+  }
+  for (const [bh, list] of Array.from(byBlock.entries())) {
+    if (list.length <= 1) continue;
+    const txids = await fetchBlockTxids(bh);
+    if (!txids?.length) continue;
+    const idx = new Map<string, number>();
+    for (let i = 0; i < txids.length; i++) {
+      idx.set(txids[i]!.toLowerCase(), i);
+    }
+    for (const r of list) {
+      const i = idx.get(r.hash.toLowerCase());
+      if (i != null) r.blockOrderIndex = i;
+    }
+  }
 }
 
 /**
@@ -360,9 +431,8 @@ export async function processArkhamBatchSignals(): Promise<{
       if (bt <= 0) bt = await blockTimeForTx(h);
       outSimple.push({ hash: h, blockTime: bt, btc: m.row.btc });
     }
-    outSimple.sort((a, b) =>
-      a.blockTime !== b.blockTime ? a.blockTime - b.blockTime : a.hash.localeCompare(b.hash)
-    );
+    await assignBlockOrderIndices(outSimple);
+    sortSimplePairRows(outSimple);
 
     const nextDay: DayPayload = {
       ...nextDayBase,
@@ -390,9 +460,8 @@ export async function processArkhamBatchSignals(): Promise<{
       if (bt <= 0) bt = await blockTimeForTx(h);
       inSimple.push({ hash: h, blockTime: bt, btc: m.row.btc });
     }
-    inSimple.sort((a, b) =>
-      a.blockTime !== b.blockTime ? a.blockTime - b.blockTime : a.hash.localeCompare(b.hash)
-    );
+    await assignBlockOrderIndices(inSimple);
+    sortSimplePairRows(inSimple);
 
     nextDay.inHashes = inSimple.map((r) => r.hash);
 
@@ -433,9 +502,14 @@ export async function processArkhamBatchSignals(): Promise<{
     if (r.blockTime <= 0) r.blockTime = await blockTimeForTx(r.hash);
   }
 
+  await assignClassifiedBlockOrderIndices(outRows);
+  await assignClassifiedBlockOrderIndices(inRows);
   const sortLegs = (rows: ClassifiedRow[]) => {
     rows.sort((a, b) => {
       if (a.blockTime !== b.blockTime) return a.blockTime - b.blockTime;
+      const ia = a.blockOrderIndex;
+      const ib = b.blockOrderIndex;
+      if (ia != null && ib != null && ia !== ib) return ia - ib;
       if (a.kind !== b.kind) return a.kind === 'runup' ? -1 : 1;
       return a.hash.localeCompare(b.hash);
     });

@@ -15,7 +15,7 @@ export interface BlockstreamVin {
 
 export interface BlockstreamTxRef {
   txid: string;
-  status: { block_time?: number; confirmed: boolean };
+  status: { block_time?: number; confirmed: boolean; block_hash?: string };
   vin?: BlockstreamVin[];
   vout: Array<{
     value: number;
@@ -44,6 +44,16 @@ export async function fetchTx(txid: string): Promise<BlockstreamTxRef | null> {
   if (!res.ok) return null;
   const json = (await res.json()) as BlockstreamTxRef;
   return json?.txid ? json : null;
+}
+
+/** All txids in a block (merkle / consensus order). Cached well on public Esplora. */
+export async function fetchBlockTxids(blockHash: string): Promise<string[] | null> {
+  const url = `${baseUrl()}/block/${encodeURIComponent(blockHash)}/txids`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) return null;
+  const json = (await res.json()) as unknown;
+  if (!Array.isArray(json)) return null;
+  return json.filter((h): h is string => typeof h === 'string');
 }
 
 export function sumToAddresses(
