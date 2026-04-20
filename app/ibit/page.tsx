@@ -16,6 +16,13 @@ const COVER_SLOTS = 25;
 const POLL_MS = 60_000;
 const PRICE_MS = 10_000;
 
+const SERVER_TRADING_AUTOSIGN =
+  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_SOLANA_SERVER_AUTOSIGN === '1';
+const SERVER_TRADING_WALLET_PUBKEY =
+  typeof process !== 'undefined'
+    ? process.env.NEXT_PUBLIC_SOLANA_SERVER_TRADING_WALLET?.trim()
+    : undefined;
+
 interface PollPayload {
   configured: boolean;
   watchAddresses: string[];
@@ -132,7 +139,7 @@ export default function IbitPage() {
 
   const executeBtc = useCallback(
     async (side: 'long' | 'short', sizeUsd: number) => {
-      if (!publicKey || !wallet?.adapter) return;
+      if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
       setExecError(null);
       const btc = btcPrice;
       if (!btc || btc <= 0) {
@@ -143,25 +150,38 @@ export default function IbitPage() {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            side,
-            owner: publicKey.toString(),
-            sizeUsd,
-            leverage,
-            asset: 'btc',
-            btcPrice: btc,
-          }),
+          body: JSON.stringify(
+            SERVER_TRADING_AUTOSIGN
+              ? {
+                  side,
+                  signAndSend: true,
+                  ...(SERVER_TRADING_WALLET_PUBKEY ? { owner: SERVER_TRADING_WALLET_PUBKEY } : {}),
+                  sizeUsd,
+                  leverage,
+                  asset: 'btc',
+                  btcPrice: btc,
+                }
+              : {
+                  side,
+                  owner: publicKey!.toString(),
+                  sizeUsd,
+                  leverage,
+                  asset: 'btc',
+                  btcPrice: btc,
+                }
+          ),
         });
         const json = await res.json();
         if (!json.success) {
           setExecError(json.error || 'Execution failed');
           return;
         }
+        if (json.data?.signature) return;
         if (json.data?.serializedTx) {
           const tx = VersionedTransaction.deserialize(
             Buffer.from(json.data.serializedTx, 'base64')
           );
-          const sig = await wallet.adapter.sendTransaction(tx, connection, {
+          const sig = await wallet!.adapter!.sendTransaction(tx, connection, {
             skipPreflight: false,
           });
           await connection.confirmTransaction(sig);
@@ -179,7 +199,7 @@ export default function IbitPage() {
     for (const s of poll.signals) {
       if (processedSignalsRef.current.has(s.txid)) continue;
       processedSignalsRef.current.add(s.txid);
-      if (liveMode && connected && s.blockTime > 0) {
+      if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && s.blockTime > 0) {
         void executeBtc('short', liveAmountUsd).then(() => {
           setShortActive(true);
           setEntryNotionalUsd(liveAmountUsd);
@@ -193,7 +213,7 @@ export default function IbitPage() {
         setSignalTxid(s.txid);
       }
     }
-  }, [poll, liveMode, connected, liveAmountUsd, executeBtc]);
+  }, [poll, liveMode, connected, liveAmountUsd, executeBtc, SERVER_TRADING_AUTOSIGN]);
 
   const coverScheduleForActive = useMemo(() => {
     if (!signalTxid) return null;
@@ -272,7 +292,7 @@ export default function IbitPage() {
         <div className="container mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-4">
           <h1 className="text-2xl font-bold text-gray-900">IBIT → Coinbase (BTC)</h1>
           <div className="flex items-center gap-3 flex-wrap">
-            {connected && (
+            {(connected || SERVER_TRADING_AUTOSIGN) && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-gray-600">Mode:</span>
                 <button
@@ -404,7 +424,7 @@ export default function IbitPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!connected || !liveMode}
+              disabled={!liveMode || (!SERVER_TRADING_AUTOSIGN && !connected)}
               onClick={() => {
                 if (shortActive) return;
                 scheduledTxRef.current = null;
@@ -422,7 +442,7 @@ export default function IbitPage() {
             </button>
             <button
               type="button"
-              disabled={!connected || !liveMode || !shortActive}
+              disabled={!liveMode || (!SERVER_TRADING_AUTOSIGN && !connected) || !shortActive}
               onClick={() => {
                 const slice = entryNotionalUsd / COVER_SLOTS;
                 void executeBtc('long', slice).then(() =>

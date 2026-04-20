@@ -62,6 +62,14 @@ const INSIDE_BAR_SERVER_SYNC_MS = (() => {
   return 2000;
 })();
 
+/** When 1 + server env SOLANA_TRADING_SERVER_SIGNING + keypair: execute API signs & sends (no browser wallet). */
+const SERVER_TRADING_AUTOSIGN =
+  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_SOLANA_SERVER_AUTOSIGN === '1';
+const SERVER_TRADING_WALLET_PUBKEY =
+  typeof process !== 'undefined'
+    ? process.env.NEXT_PUBLIC_SOLANA_SERVER_TRADING_WALLET?.trim()
+    : undefined;
+
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 /** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
@@ -595,7 +603,7 @@ export default function TradePage() {
 
   const executeOnBreakout = useCallback(
     async (side: 'long' | 'short', markPrice: number, strategyId: string) => {
-      if (!publicKey || !wallet?.adapter) return;
+      if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
       setExecError(null);
       const sizeUsd = liveAmountByStrategyRef.current[strategyId] ?? liveAmountToRun;
       const def = INSIDE_BAR_STRATEGIES.find((x) => x.id === strategyId);
@@ -604,28 +612,44 @@ export default function TradePage() {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          side,
-          owner: publicKey.toString(),
-          sizeUsd,
-          leverage,
-          solPrice: asset === 'sol' ? markPrice : undefined,
-          btcPrice: asset === 'btc' ? markPrice : undefined,
-          asset: asset === 'btc' ? 'btc' : 'sol',
-        }),
+          body: JSON.stringify(
+            SERVER_TRADING_AUTOSIGN
+              ? {
+                  side,
+                  signAndSend: true,
+                  ...(SERVER_TRADING_WALLET_PUBKEY ? { owner: SERVER_TRADING_WALLET_PUBKEY } : {}),
+                  sizeUsd,
+                  leverage,
+                  solPrice: asset === 'sol' ? markPrice : undefined,
+                  btcPrice: asset === 'btc' ? markPrice : undefined,
+                  asset: asset === 'btc' ? 'btc' : 'sol',
+                }
+              : {
+                  side,
+                  owner: publicKey!.toString(),
+                  sizeUsd,
+                  leverage,
+                  solPrice: asset === 'sol' ? markPrice : undefined,
+                  btcPrice: asset === 'btc' ? markPrice : undefined,
+                  asset: asset === 'btc' ? 'btc' : 'sol',
+                }
+          ),
         });
-        const json = await parseApiJson<{ success?: boolean; error?: string; data?: { serializedTx?: string } }>(
-          res
-        );
+        const json = await parseApiJson<{
+          success?: boolean;
+          error?: string;
+          data?: { serializedTx?: string; signature?: string };
+        }>(res);
         if (!json.success) {
           setExecError(json.error || 'Execution failed');
           return;
         }
+        if (json.data?.signature) return;
         if (json.data?.serializedTx) {
           const tx = VersionedTransaction.deserialize(
             Buffer.from(json.data.serializedTx, 'base64')
           );
-          const sig = await wallet.adapter.sendTransaction(tx, connection, {
+          const sig = await wallet!.adapter!.sendTransaction(tx, connection, {
             skipPreflight: false,
           });
           await connection.confirmTransaction(sig);
@@ -1168,7 +1192,7 @@ export default function TradePage() {
             const fillPx = setup ? insideBarEntryFillPrice('long', setup, px) : px;
             st = enterLong(st, fillPx, pt);
             state[sid] = st;
-            if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
+            if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && (asset === 'sol' || asset === 'btc')) {
               void executeOnBreakout('long', fillPx, sid);
             }
           }
@@ -1185,7 +1209,7 @@ export default function TradePage() {
             const fillPx = setup ? insideBarEntryFillPrice('short', setup, px) : px;
             st = enterShort(st, fillPx, pt);
             state[sid] = st;
-            if (liveMode && connected && (asset === 'sol' || asset === 'btc')) {
+            if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && (asset === 'sol' || asset === 'btc')) {
               void executeOnBreakout('short', fillPx, sid);
             }
           }
@@ -1247,6 +1271,7 @@ export default function TradePage() {
     liveMode,
     connected,
     executeOnBreakout,
+    SERVER_TRADING_AUTOSIGN,
     paperPositionSizeUsd,
     liveAmountToRun,
   ]);
@@ -1286,7 +1311,7 @@ export default function TradePage() {
             <div className="flex items-center justify-between flex-wrap gap-4">
               <h1 className="text-2xl font-bold text-gray-900">Jupiter Perps — inside bar</h1>
               <div className="flex items-center gap-4">
-                {connected && (
+                {(connected || SERVER_TRADING_AUTOSIGN) && (
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-gray-600">Mode:</span>
                     <button
@@ -1433,14 +1458,25 @@ export default function TradePage() {
 
         {liveMode && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">
-            {connected && (
+            {SERVER_TRADING_AUTOSIGN ? (
               <div>
-                <p className="text-green-800 font-medium">Live trading enabled</p>
+                <p className="text-green-800 font-medium">Live trading — server signing</p>
                 <p className="text-green-700 text-sm mt-1">
-                  Breakouts will trigger Jupiter Perps execution via Solflare. Shorts require USDC collateral.
-                  Uses request-fulfillment model (keepers execute).
+                  Breakouts submit Jupiter Perp increase requests signed on the server (hot wallet). No browser
+                  approval. Fund only the dedicated server wallet; keep the keypair off git and restrict file
+                  permissions on the VPS.
                 </p>
               </div>
+            ) : (
+              connected && (
+                <div>
+                  <p className="text-green-800 font-medium">Live trading enabled</p>
+                  <p className="text-green-700 text-sm mt-1">
+                    Breakouts will trigger Jupiter Perps execution via Solflare. Shorts require USDC collateral.
+                    Uses request-fulfillment model (keepers execute).
+                  </p>
+                </div>
+              )
             )}
             <div>
               <label className="block text-sm text-green-800 font-medium mb-1">

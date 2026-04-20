@@ -11,6 +11,13 @@ const WalletMultiButton = dynamic(
   { ssr: false }
 );
 
+const SERVER_TRADING_AUTOSIGN =
+  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_SOLANA_SERVER_AUTOSIGN === '1';
+const SERVER_TRADING_WALLET_PUBKEY =
+  typeof process !== 'undefined'
+    ? process.env.NEXT_PUBLIC_SOLANA_SERVER_TRADING_WALLET?.trim()
+    : undefined;
+
 type Pos = {
   asset: string;
   direction: 'long' | 'short';
@@ -67,7 +74,7 @@ export default function MeanReversionPage() {
 
   const executeMarket = useCallback(
     async (asset: 'sol' | 'btc', side: 'long' | 'short', sizeUsd: number) => {
-      if (!publicKey || !wallet?.adapter) return;
+      if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
       setExecMsg(null);
       try {
         let solPrice: number | undefined;
@@ -82,26 +89,43 @@ export default function MeanReversionPage() {
         const res = await fetch('/api/solana-bot/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            side,
-            owner: publicKey.toString(),
-            sizeUsd,
-            leverage: 1.5,
-            asset,
-            solPrice: asset === 'sol' ? solPrice : undefined,
-            btcPrice: asset === 'btc' ? btcPrice : undefined,
-          }),
+          body: JSON.stringify(
+            SERVER_TRADING_AUTOSIGN
+              ? {
+                  side,
+                  signAndSend: true,
+                  ...(SERVER_TRADING_WALLET_PUBKEY ? { owner: SERVER_TRADING_WALLET_PUBKEY } : {}),
+                  sizeUsd,
+                  leverage: 1.5,
+                  asset,
+                  solPrice: asset === 'sol' ? solPrice : undefined,
+                  btcPrice: asset === 'btc' ? btcPrice : undefined,
+                }
+              : {
+                  side,
+                  owner: publicKey!.toString(),
+                  sizeUsd,
+                  leverage: 1.5,
+                  asset,
+                  solPrice: asset === 'sol' ? solPrice : undefined,
+                  btcPrice: asset === 'btc' ? btcPrice : undefined,
+                }
+          ),
         });
         const json = await res.json();
         if (!json.success) {
           setExecMsg(json.error || 'Execute failed');
           return;
         }
+        if (json.data?.signature) {
+          setExecMsg(`${asset.toUpperCase()} ${side} submitted (server)`);
+          return;
+        }
         if (json.data?.serializedTx) {
           const tx = VersionedTransaction.deserialize(
             Buffer.from(json.data.serializedTx, 'base64')
           );
-          const sig = await wallet.adapter.sendTransaction(tx, connection, { skipPreflight: false });
+          const sig = await wallet!.adapter!.sendTransaction(tx, connection, { skipPreflight: false });
           await connection.confirmTransaction(sig);
           setExecMsg(`${asset.toUpperCase()} ${side} submitted`);
         }
@@ -113,7 +137,7 @@ export default function MeanReversionPage() {
   );
 
   useEffect(() => {
-    if (!liveMode || !connected || !tickData?.positions) return;
+    if (!liveMode || (!SERVER_TRADING_AUTOSIGN && !connected) || !tickData?.positions) return;
     const size = tickData.positionSizeUsd ?? 200;
     for (const asset of ['sol', 'btc'] as const) {
       const p = tickData.positions[asset];
@@ -123,14 +147,14 @@ export default function MeanReversionPage() {
       executedRef.current.add(key);
       void executeMarket(asset, p.direction, size);
     }
-  }, [liveMode, connected, tickData, executeMarket]);
+  }, [liveMode, connected, tickData, executeMarket, SERVER_TRADING_AUTOSIGN]);
 
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 px-4 py-4 flex flex-wrap justify-between items-center gap-4">
         <h1 className="text-xl font-bold text-gray-900">Mean reversion (Jupiter Perps)</h1>
         <div className="flex items-center gap-3">
-          {connected && (
+          {(connected || SERVER_TRADING_AUTOSIGN) && (
             <div className="flex gap-1 text-sm">
               <button
                 type="button"
