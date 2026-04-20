@@ -92,6 +92,44 @@ export function applyInsideBarPatternFromCandles(
       st.lastTradedCandleUnixTime != null &&
       setup.candleUnixTime === st.lastTradedCandleUnixTime;
 
+    /**
+     * While `pattern_detected`, the **newest completed** candle may still be the pattern bar.
+     * OHLC can change after Binance merge / oracle ticks. Stale `breakoutHigh/Low` caused false
+     * entries (e.g. inside bar invalidated when true low printed). Re-run `detectPattern` each
+     * tick; clear if geometry breaks, else refresh levels from current candles.
+     */
+    if (
+      st.status === 'pattern_detected' &&
+      st.setup &&
+      c[0] &&
+      c[0].unixTime === st.setup.candleUnixTime
+    ) {
+      if (setup == null) {
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[s.id] = {
+          ...createInitialState(),
+          lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+        };
+        refs.entering[s.id] = false;
+        refs.breakout[s.id] = { long: 0, short: 0 };
+        continue;
+      }
+      if (!changed) {
+        next = { ...prev };
+        changed = true;
+      }
+      refs.breakout[s.id] = { long: 0, short: 0 };
+      refs.entering[s.id] = false;
+      next[s.id] = {
+        ...createPatternDetectedState(setup),
+        lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
+      };
+      continue;
+    }
+
     if (setup && !sameCandleAlreadyTraded) {
       const isDoubleInside =
         st.status === 'pattern_detected' &&
