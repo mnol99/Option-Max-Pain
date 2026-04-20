@@ -190,6 +190,12 @@ export default function TradePage() {
   );
   /** Skip one client price tick after switching paper→live (avoid duplicate with server). */
   const paperSyncSkipRef = useRef(false);
+  /**
+   * First paper tick after load (or after switching back from live): do **not** merge
+   * `sessionStorage` into the server — stale tab state overwrote persisted server truth and
+   * caused instant bogus positions on refresh.
+   */
+  const insideBarPaperServerAuthorityRef = useRef(true);
   const tradesInsideBarRef = useRef<Record<string, ClosedTrade[]>>(
     Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, [] as ClosedTrade[]]))
   );
@@ -972,21 +978,24 @@ export default function TradePage() {
     const run = async () => {
       if (cancelled) return;
       try {
-        const clientSnapshot: Partial<InsideBarServerSnapshot> = {
-          stateByStrategy: { ...stateByStrategyRef.current },
-          entering: Object.fromEntries(
-            INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
-          ),
-          breakout: Object.fromEntries(
-            INSIDE_BAR_STRATEGIES.map((s) => [
-              s.id,
-              { ...breakoutRef.current[s.id] },
-            ])
-          ),
-          tradesByStrategy: Object.fromEntries(
-            INSIDE_BAR_STRATEGIES.map((s) => [s.id, tradesInsideBarRef.current[s.id] ?? []])
-          ),
-        };
+        const serverAuthority = insideBarPaperServerAuthorityRef.current;
+        const clientSnapshot: Partial<InsideBarServerSnapshot> | undefined = serverAuthority
+          ? undefined
+          : {
+              stateByStrategy: { ...stateByStrategyRef.current },
+              entering: Object.fromEntries(
+                INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
+              ),
+              breakout: Object.fromEntries(
+                INSIDE_BAR_STRATEGIES.map((s) => [
+                  s.id,
+                  { ...breakoutRef.current[s.id] },
+                ])
+              ),
+              tradesByStrategy: Object.fromEntries(
+                INSIDE_BAR_STRATEGIES.map((s) => [s.id, tradesInsideBarRef.current[s.id] ?? []])
+              ),
+            };
         const res = await fetch('/api/solana-bot/inside-bar/tick', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1008,6 +1017,7 @@ export default function TradePage() {
           };
         }>(res);
         if (!json.success || !json.data || cancelled) return;
+        insideBarPaperServerAuthorityRef.current = false;
         const d = json.data as {
           snapshot: InsideBarServerSnapshot & { lastTickAt: number };
           price: number;
@@ -1067,6 +1077,11 @@ export default function TradePage() {
       document.removeEventListener('visibilitychange', onVis);
     };
   }, [liveMode, paperPositionSizeUsd, useChartPrice]);
+
+  /** Paper: next inside-bar tick should take server snapshot only (no client merge). */
+  useEffect(() => {
+    if (!liveMode) insideBarPaperServerAuthorityRef.current = true;
+  }, [liveMode]);
 
   // Process price for all strategies (per-underlying mark) — live mode only
   useEffect(() => {
