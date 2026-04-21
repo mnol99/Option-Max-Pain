@@ -220,6 +220,34 @@ export default function TradePage() {
   const blkTradedShortEtDaysRef = useRef<Set<string>>(new Set());
   const blkTradedLongEtDaysRef = useRef<Set<string>>(new Set());
 
+  /** Zero inside-bar trade log + strategy state (browser + server paper snapshot). BLK tab unchanged. */
+  const clearLiveInsideBarUiHistory = useCallback(async () => {
+    const freshStates = initialInsideStateMap();
+    setStateByStrategy(freshStates);
+    stateByStrategyRef.current = freshStates;
+    setTradesByStrategy((prev) => {
+      const next = { ...prev };
+      for (const s of INSIDE_BAR_STRATEGIES) {
+        next[s.id] = [];
+      }
+      return next;
+    });
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      tradesInsideBarRef.current[s.id] = [];
+      enteringRef.current[s.id] = false;
+      breakoutRef.current[s.id] = { long: 0, short: 0 };
+    }
+    setBreakoutByStrategy(
+      Object.fromEntries(INSIDE_BAR_STRATEGIES.map((s) => [s.id, { long: 0, short: 0 }]))
+    );
+    setAuditExpanded(new Set());
+    try {
+      await fetch('/api/solana-bot/inside-bar/reset', { method: 'POST' });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const clearBlkPaperHistory = useCallback(() => {
     const fresh = createBlkInitialState();
     blkPaperStateRef.current = fresh;
@@ -1505,6 +1533,29 @@ export default function TradePage() {
               />
               <p className="text-green-700 text-xs mt-1">
                 Dollar amount to use per trade (e.g. $1,000 of your $5,000 balance)
+              </p>
+            </div>
+            <div className="pt-2 border-t border-green-200">
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    typeof window !== 'undefined' &&
+                    !window.confirm(
+                      'Clear inside-bar trade log and P/L for all SOL/ETH/BTC 60m and Daily tabs? (BLK tab unchanged. On-chain positions are not closed.)'
+                    )
+                  ) {
+                    return;
+                  }
+                  void clearLiveInsideBarUiHistory();
+                }}
+                className="px-3 py-1.5 text-sm font-medium rounded border border-green-700 text-green-900 bg-white hover:bg-green-100"
+              >
+                Reset inside-bar log (live UI)
+              </button>
+              <p className="text-green-700 text-xs mt-1">
+                Switching to Live does not clear paper history. Use this for a clean log; Jupiter / wallet
+                positions are separate.
               </p>
             </div>
           </div>

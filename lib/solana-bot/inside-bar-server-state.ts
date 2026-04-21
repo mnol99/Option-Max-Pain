@@ -169,6 +169,12 @@ export function resetInsideBarServerState(): void {
   };
 }
 
+/** Clear in-memory paper sim + optional disk snapshot (so paper / UI start at zero). */
+export function resetInsideBarServerStateAndPersist(): void {
+  resetInsideBarServerState();
+  persistServerPaperStateToDisk();
+}
+
 /** Serialize ticks (OHLC + strategy) so concurrent requests don't interleave. */
 let tickChain: Promise<unknown> = Promise.resolve();
 
