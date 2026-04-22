@@ -1,0 +1,27 @@
+# Example systemd unit for the Next.js app on a VPS.
+# Install:
+#   sudo cp deploy/option-max-pain.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now option-max-pain
+#
+# Adjust paths and User= if the app is not in /opt/Option-Max-Pain.
+#
+# If using .env.local, it is read from WorkingDirectory; ensure that file exists.
+
+[Unit]
+Description=Option-Max-Pain (Next.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/Option-Max-Pain
+Environment=NODE_ENV=production
+# Use the local next binary (no global npm required for ExecStart)
+ExecStart=/opt/Option-Max-Pain/node_modules/.bin/next start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
