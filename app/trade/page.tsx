@@ -630,6 +630,65 @@ export default function TradePage() {
   const warmupMinutes = isBlkTab ? 0 : (warmupByStrategy[activeStrategyId] ?? 0);
   const breakoutConfirmCount = breakoutByStrategy[activeStrategyId] ?? { long: 0, short: 0 };
 
+  /** BLK: Jupiter WBTC perp (same as /ibit) — notional USD = liveAmountToRun × leverage. */
+  const executeBlkBtc = useCallback(
+    async (side: 'long' | 'short', notionalUsd: number) => {
+      if (notionalUsd <= 0) return;
+      if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
+      if (btcPrice == null || btcPrice <= 0) return;
+      setExecError(null);
+      const px = btcPrice;
+      try {
+        const res = await fetch('/api/solana-bot/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            SERVER_TRADING_AUTOSIGN
+              ? {
+                  side,
+                  signAndSend: true,
+                  ...(SERVER_TRADING_WALLET_PUBKEY ? { owner: SERVER_TRADING_WALLET_PUBKEY } : {}),
+                  sizeUsd: notionalUsd,
+                  leverage: 1,
+                  btcPrice: px,
+                  asset: 'btc',
+                }
+              : {
+                  side,
+                  owner: publicKey!.toString(),
+                  sizeUsd: notionalUsd,
+                  leverage: 1,
+                  btcPrice: px,
+                  asset: 'btc',
+                }
+          ),
+        });
+        const json = await parseApiJson<{
+          success?: boolean;
+          error?: string;
+          data?: { serializedTx?: string; signature?: string };
+        }>(res);
+        if (!json.success) {
+          setExecError(json.error || 'BLK execute failed');
+          return;
+        }
+        if (json.data?.signature) return;
+        if (json.data?.serializedTx) {
+          const tx = VersionedTransaction.deserialize(
+            Buffer.from(json.data.serializedTx, 'base64')
+          );
+          const sig = await wallet!.adapter!.sendTransaction(tx, connection, {
+            skipPreflight: false,
+          });
+          await connection.confirmTransaction(sig);
+        }
+      } catch (e) {
+        setExecError(e instanceof Error ? e.message : 'BLK execute failed');
+      }
+    },
+    [publicKey, wallet, connection, btcPrice, SERVER_TRADING_AUTOSIGN]
+  );
+
   const executeOnBreakout = useCallback(
     async (side: 'long' | 'short', markPrice: number, strategyId: string) => {
       if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
@@ -722,9 +781,9 @@ export default function TradePage() {
     return () => clearInterval(id);
   }, [fetchBtcPrice]);
 
-  /** IBIT poll → paper short/long (allocation × leverage) when signal; no poll while a BLK session is open. */
+  /** IBIT poll → short/long (paper sim or live: Jupiter at entry). */
   useEffect(() => {
-    if (liveMode || btcPrice == null || btcPrice <= 0) return;
+    if (btcPrice == null || btcPrice <= 0) return;
     let cancelled = false;
     const run = async () => {
       try {
@@ -837,9 +896,9 @@ export default function TradePage() {
     };
   }, [liveMode, btcPrice, paperPositionSizeUsd, leverage, persistBlkProcessedTxids]);
 
-  /** BLK paper: one process step per effect; loop catches up multiple covers after idle. */
+  /** BLK: paper sim + in live, mirror session open and cover slices to Jupiter. */
   useEffect(() => {
-    if (liveMode || btcPrice == null || btcTime == null) return;
+    if (btcPrice == null || btcTime == null) return;
     let prev = blkPaperStateRef.current;
     const batch: ClosedTrade[] = [];
     for (let step = 0; step < 24; step++) {
@@ -856,8 +915,26 @@ export default function TradePage() {
         ...p,
         [BLK_STRATEGY_ID]: [...enriched.reverse(), ...(p[BLK_STRATEGY_ID] ?? [])],
       }));
+      if (liveMode && (SERVER_TRADING_AUTOSIGN || connected)) {
+        for (const t of batch) {
+          if (t.exitReason !== 'blk_open' && t.exitReason !== 'blk_cover') continue;
+          const exSide = t.blkJupiterOrderSide;
+          if (!exSide) continue;
+          const totalSlices = t.blkCoverSliceTotal && t.blkCoverSliceTotal > 0 ? t.blkCoverSliceTotal : 1;
+          const n = (liveAmountToRun * leverage) / totalSlices;
+          void executeBlkBtc(exSide, n);
+        }
+      }
     }
-  }, [btcPrice, btcTime, liveMode]);
+  }, [
+    btcPrice,
+    btcTime,
+    liveMode,
+    liveAmountToRun,
+    leverage,
+    connected,
+    executeBlkBtc,
+  ]);
 
   const fetchPrice = useCallback(async () => {
     try {
@@ -1412,7 +1489,7 @@ export default function TradePage() {
               signal after <span className="font-semibold">2:00 PM ET</span> (set server{' '}
               <code className="text-xs bg-gray-100 px-1">BLK_DISABLE_LONG_BUY_CUTOFF=1</code> to allow longs any
               time). Pyth BTC. Signals from{' '}
-              <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper mode only).
+              <code className="text-xs bg-gray-100 px-1">/api/…/ibit/poll</code> (paper + live: signals; live uses Jupiter WBTC perp).
             </>
           ) : (
             <>
@@ -1734,7 +1811,8 @@ export default function TradePage() {
                     </p>
                   </div>
                   <p className="text-xs text-gray-500">
-                    Paper only. Live mode does not auto-trade BLK here.
+                    Live: BLK short/long and cover schedule submit Jupiter increases with Amount to run ×
+                    leverage (notional) when the wallet (or server autosign) is available.
                   </p>
                 </div>
               ) : (
@@ -1774,7 +1852,7 @@ export default function TradePage() {
                   <p className="text-xs text-gray-500">
                     {activeUnderlying === 'sol'
                       ? 'Doves / Pyth (SOL) — matches Jupiter SOL perp execution'
-                      : 'Pyth USD mark — pattern + paper sim; live auto-exec: SOL + WBTC perps only'}
+                      : 'Pyth USD mark — inside-bar paper sim; live auto-exec: SOL + WETH + WBTC; BLK uses WBTC perp'}
                   </p>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input

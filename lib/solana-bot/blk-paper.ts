@@ -215,6 +215,7 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
   return {
     id: newTradeId(),
     side,
+    blkJupiterOrderSide: side,
     entryPrice: entry,
     entryTime: t,
     exitPrice: entry,
@@ -292,13 +293,16 @@ export function processBlkPaperTick(
   const pnlPercent = sliceUsd > 0 ? (legPnlUsd / sliceUsd) * 100 : 0;
   const idx = next.nextSliceIndex;
   const coverExitTimeSec = Math.floor(slotEndMs / 1000);
+  /** Short session: reduce short with a long. Long session: reduce long with a short. */
+  const coverJupiterSide: 'long' | 'short' = isLong ? 'short' : 'long';
 
   next.nextSliceIndex += 1;
   next.cumulativePnlUsd = cumulative;
 
   closedTrades.push({
     id: newTradeId(),
-    side: isLong ? 'long' : 'short',
+    side: coverJupiterSide,
+    blkJupiterOrderSide: coverJupiterSide,
     entryPrice: entry,
     entryTime: next.entryTime!,
     exitPrice: btcPrice,
