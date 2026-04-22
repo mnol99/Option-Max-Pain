@@ -4,24 +4,17 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { VersionedTransaction } from '@solana/web3.js';
-import { detectPattern, isBreakoutLong, isBreakoutShort } from '@/lib/solana-bot/pattern-engine';
-import { applyInsideBarPatternFromCandles } from '@/lib/solana-bot/inside-bar-engine';
+import { runInsideBarStep } from '@/lib/solana-bot/inside-bar-engine';
 import {
   createInitialState,
-  enterLong,
-  enterShort,
-  checkPositionExit,
-  checkReversedExit,
   computeMetrics,
   computeBlkMetrics,
   getEffectiveTpLong,
   getEffectiveTpShort,
-  insideBarEntryFillPrice,
   JUPITER_PERPS_EST_FEE_BPS_PER_SIDE,
   timeWindowSecFromSetup,
   POSITION_MANAGEMENT_SEC,
   managementWindowEndFromClosedTradeSetup,
-  wallAwareExitClockSec,
 } from '@/lib/solana-bot/trade-state';
 import type { TradeState, ClosedTrade, OHLCVCandle } from '@/lib/solana-bot/types';
 import {
@@ -45,7 +38,6 @@ import {
 import type { InsideBarServerSnapshot } from '@/lib/solana-bot/inside-bar-server-state';
 import { parseApiJson } from '@/lib/solana-bot/parse-api-json';
 import {
-  isWeekendHalt60mEt,
   BLK_COVER_SLOT_COUNT_MORNING,
   BLK_COVER_SLOT_COUNT_AFTERNOON,
   BLK_LONG_COVER_SLOT_COUNT,
@@ -1058,33 +1050,6 @@ export default function TradePage() {
     }
   }, [useChartPrice, candles]);
 
-  // Pattern detection when candles update (each strategy / bar size) — live mode only; paper uses server tick
-  useEffect(() => {
-    if (!liveMode) return;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const patternRefs = {
-      entering: Object.fromEntries(
-        INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
-      ),
-      breakout: Object.fromEntries(
-        INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...breakoutRef.current[s.id] }])
-      ),
-    };
-    setStateByStrategy((prev) => {
-      const merged = applyInsideBarPatternFromCandles(
-        INSIDE_BAR_STRATEGIES,
-        prev,
-        candlesByStrategy,
-        patternRefs,
-        nowSec
-      );
-      for (const s of INSIDE_BAR_STRATEGIES) {
-        breakoutRef.current[s.id] = { ...patternRefs.breakout[s.id] };
-      }
-      return merged;
-    });
-  }, [candlesByStrategy, liveMode]);
-
   // Price polling — live mode only (paper: server /inside-bar/tick advances simulation)
   useEffect(() => {
     if (!liveMode) return;
@@ -1215,7 +1180,11 @@ export default function TradePage() {
     if (!liveMode) insideBarPaperServerAuthorityRef.current = true;
   }, [liveMode]);
 
-  // Process price for all strategies (per-underlying mark) — live mode only
+  /**
+   * Live: one atomic step (pattern from candles, then mark / exits / breakouts) per `runInsideBarStep`.
+   * Keeping pattern + price in separate effects was racy: the price effect could see stale ref state
+   * and never arm or execute the same tick the pattern appeared.
+   */
   useEffect(() => {
     if (!liveMode) return;
     if (paperSyncSkipRef.current) {
@@ -1223,9 +1192,70 @@ export default function TradePage() {
       return;
     }
 
-    const positionSize = liveMode ? liveAmountToRun : paperPositionSizeUsd;
-    const state = { ...stateByStrategyRef.current };
-    const newTrades: Record<string, ClosedTrade[]> = {};
+    const positionSize = liveAmountToRun;
+    const before = stateByStrategyRef.current;
+    const refs = {
+      entering: Object.fromEntries(
+        INSIDE_BAR_STRATEGIES.map((s) => [s.id, enteringRef.current[s.id] ?? false])
+      ),
+      breakout: Object.fromEntries(
+        INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...breakoutRef.current[s.id] }])
+      ),
+    };
+
+    const markForStrategy = (s: (typeof INSIDE_BAR_STRATEGIES)[number]) => {
+      const c = candlesByStrategy[s.id] ?? [];
+      if (useChartPrice && c[0]?.close != null && c[0].close > 0) {
+        return { price: c[0].close, time: Math.floor(Date.now() / 1000) };
+      }
+      const u = strategyUnderlying(s);
+      return markPrices[u] ?? null;
+    };
+
+    const priceByStrategyId: Record<string, number> = {};
+    const priceTimeByStrategyId: Record<string, number> = {};
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      const mv = markForStrategy(s);
+      if (!mv) continue;
+      priceByStrategyId[s.id] = mv.price;
+      priceTimeByStrategyId[s.id] = mv.time;
+    }
+
+    const { stateByStrategy: next, refs: outRefs, newTrades } = runInsideBarStep(
+      INSIDE_BAR_STRATEGIES,
+      before,
+      refs,
+      candlesByStrategy,
+      priceByStrategyId,
+      priceTimeByStrategyId,
+      positionSize
+    );
+
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      enteringRef.current[s.id] = outRefs.entering[s.id] ?? false;
+      breakoutRef.current[s.id] = { ...outRefs.breakout[s.id] };
+    }
+    stateByStrategyRef.current = next;
+    setStateByStrategy(next);
+
+    for (const s of INSIDE_BAR_STRATEGIES) {
+      const sid = s.id;
+      const prev = before[sid];
+      const st = next[sid];
+      if (!st) continue;
+      if (
+        prev?.status === 'pattern_detected' &&
+        st.status === 'in_position' &&
+        (st.position === 'long' || st.position === 'short') &&
+        st.entryPrice != null &&
+        (SERVER_TRADING_AUTOSIGN || connected)
+      ) {
+        const u = strategyUnderlying(s);
+        if (u === 'sol' || u === 'btc' || u === 'eth') {
+          void executeOnBreakout(st.position, st.entryPrice, sid);
+        }
+      }
+    }
 
     const enrichList = (list: ClosedTrade[], asset: 'sol' | 'btc' | 'eth'): ClosedTrade[] =>
       list.map((closedTrade) => {
@@ -1240,136 +1270,13 @@ export default function TradePage() {
         return { ...base, solAmount: amt };
       });
 
-    const markForStrategy = (s: (typeof INSIDE_BAR_STRATEGIES)[number]) => {
-      const c = candlesByStrategy[s.id] ?? [];
-      if (useChartPrice && c[0]?.close != null && c[0].close > 0) {
-        return { price: c[0].close, time: Math.floor(Date.now() / 1000) };
-      }
-      const u = strategyUnderlying(s);
-      return markPrices[u] ?? null;
-    };
-
-    for (const s of INSIDE_BAR_STRATEGIES) {
-      const sid = s.id;
-      let st = state[sid];
-      if (!st) continue;
-
-      const mv = markForStrategy(s);
-      if (!mv) continue;
-      const { price: px, time: pt } = mv;
-      const asset = strategyUnderlying(s);
-
-      if (
-        s.intervalSec === 3600 &&
-        isWeekendHalt60mEt(new Date(wallAwareExitClockSec(pt) * 1000))
-      ) {
-        if (st.status === 'in_position') {
-          const r = checkPositionExit({ ...st, windowEnd: pt - 1 }, px, pt);
-          state[sid] = r.newState;
-          if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
-          continue;
-        }
-        if (st.status === 'reversed') {
-          const r = checkReversedExit({ ...st, windowEnd: pt - 1 }, px, pt);
-          state[sid] = r.newState;
-          if (r.closedTrades.length > 0) newTrades[sid] = r.closedTrades;
-          continue;
-        }
-        if (st.status === 'pattern_detected') {
-          state[sid] = {
-            ...createInitialState(),
-            lastTradedCandleUnixTime: st.lastTradedCandleUnixTime,
-          };
-          enteringRef.current[sid] = false;
-          breakoutRef.current[sid] = { long: 0, short: 0 };
-        }
-        continue;
-      }
-
-      if (st.status === 'pattern_detected' && st.setup && !enteringRef.current[sid]) {
-        const setup = st.setup;
-        const longBreakout = isBreakoutLong(px, setup);
-        const shortBreakout = isBreakoutShort(px, setup);
-        const bc = breakoutRef.current[sid];
-
-        if (longBreakout) {
-          const prevLong = bc.long;
-          bc.long += 1;
-          bc.short = 0;
-          if (prevLong >= 0) {
-            enteringRef.current[sid] = true;
-            bc.long = 0;
-            bc.short = 0;
-            const fillPx = setup ? insideBarEntryFillPrice('long', setup, px) : px;
-            st = enterLong(st, fillPx, pt);
-            state[sid] = st;
-            if (
-              liveMode &&
-              (SERVER_TRADING_AUTOSIGN || connected) &&
-              (asset === 'sol' || asset === 'btc' || asset === 'eth')
-            ) {
-              void executeOnBreakout('long', fillPx, sid);
-            }
-          }
-          continue;
-        }
-        if (shortBreakout) {
-          const prevShort = bc.short;
-          bc.short += 1;
-          bc.long = 0;
-          if (prevShort >= 0) {
-            enteringRef.current[sid] = true;
-            bc.long = 0;
-            bc.short = 0;
-            const fillPx = setup ? insideBarEntryFillPrice('short', setup, px) : px;
-            st = enterShort(st, fillPx, pt);
-            state[sid] = st;
-            if (
-              liveMode &&
-              (SERVER_TRADING_AUTOSIGN || connected) &&
-              (asset === 'sol' || asset === 'btc' || asset === 'eth')
-            ) {
-              void executeOnBreakout('short', fillPx, sid);
-            }
-          }
-          continue;
-        }
-        bc.long = 0;
-        bc.short = 0;
-      }
-
-      if ((st.status === 'idle' || st.status === 'stopped') && enteringRef.current[sid]) {
-        enteringRef.current[sid] = false;
-      }
-
-      if (st.status === 'in_position') {
-        const { newState, closedTrades } = checkPositionExit(st, px, pt);
-        state[sid] = newState;
-        if (closedTrades.length > 0) {
-          newTrades[sid] = closedTrades;
-        }
-        continue;
-      }
-
-      if (st.status === 'reversed') {
-        const { newState, closedTrades } = checkReversedExit(st, px, pt);
-        state[sid] = newState;
-        if (closedTrades.length > 0) {
-          newTrades[sid] = closedTrades;
-        }
-      }
-    }
-
-    stateByStrategyRef.current = state;
-    setStateByStrategy(state);
-
     if (Object.keys(newTrades).length > 0) {
       setTradesByStrategy((prev) => {
         const n = { ...prev };
         for (const k of Object.keys(newTrades)) {
           const def = INSIDE_BAR_STRATEGIES.find((x) => x.id === k);
           const asset = def ? strategyUnderlying(def) : 'sol';
-          const enriched = enrichList(newTrades[k], asset).reverse();
+          const enriched = enrichList(newTrades[k]!, asset).reverse();
           n[k] = [...enriched, ...(prev[k] ?? [])];
         }
         return n;
@@ -1391,7 +1298,6 @@ export default function TradePage() {
     connected,
     executeOnBreakout,
     SERVER_TRADING_AUTOSIGN,
-    paperPositionSizeUsd,
     liveAmountToRun,
   ]);
 
