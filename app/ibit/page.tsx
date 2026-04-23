@@ -27,6 +27,8 @@ interface PollPayload {
   configured: boolean;
   watchAddresses: string[];
   coinbaseAddresses: string[];
+  /** false when IBIT_DISABLE_COINBASE_POLL=1 (Arkham batch still runs) */
+  coinbaseBlockstreamPoll?: boolean;
   inLegacySignalWindow: boolean;
   inDetectWindow: boolean;
   pollSourceWatchAddresses?: boolean;
@@ -384,6 +386,12 @@ export default function IbitPage() {
                 {poll == null ? '…' : poll.configured ? 'yes' : 'no — set env addresses'}
               </span>
             </p>
+            {poll?.coinbaseBlockstreamPoll === false && (
+              <p className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                <code className="font-mono">IBIT_DISABLE_COINBASE_POLL=1</code>: Blockstream scan of Coinbase
+                deposit address(es) is off. <strong>Arkham batch / BLK</strong> is unchanged.
+              </p>
+            )}
             {poll?.error && <p className="text-red-600">Error: {poll.error}</p>}
           </div>
         </section>
@@ -499,11 +507,12 @@ export default function IbitPage() {
         <section className="bg-white rounded-lg shadow p-6 space-y-4">
           <h2 className="text-lg font-semibold">Recent signals</h2>
           <p className="text-xs text-gray-600">
-            Primary path: monitor <strong>Coinbase deposit</strong> addresses for large (~200+ BTC) transfers
-            to the main output; sender addresses come from tx inputs. With{' '}
-            <code className="bg-gray-100 px-1">ARKHAM_API_KEY</code>, Arkham{' '}
-            <code className="bg-gray-100 px-1">GET /transfers</code> (entity <code className="bg-gray-100 px-1">base</code>,
-            Bitcoin out) supplies tx hashes; each tx is validated on Blockstream. Optional{' '}
+            <strong>Legacy</strong> path: Blockstream list of <strong>Coinbase deposit</strong> addresses
+            (large inflows to main output) — can be turned off with{' '}
+            <code className="bg-gray-100 px-1">IBIT_DISABLE_COINBASE_POLL=1</code> (recommended with{' '}
+            <code className="bg-gray-100 px-1">ARKHAM_BATCH_MODE=1</code>). <strong>Arkham / BLK</strong> uses{' '}
+            <code className="bg-gray-100 px-1">GET /transfers</code> and Blockstream <code className="bg-gray-100 px-1">fetchTx</code>{' '}
+            per hash — separate from that deposit-address poll. Optional{' '}
             <code className="bg-gray-100 px-1">IBIT_POLL_SOURCE_WATCH=1</code> also polls legacy custodian
             source addresses.
           </p>

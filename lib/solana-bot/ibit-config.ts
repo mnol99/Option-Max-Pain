@@ -244,7 +244,15 @@ export function getArkhamLongAfterMinEt(): number {
   return 9 * 60 + 30;
 }
 
-/** Skip Blockstream Coinbase deposit / legacy watch polls when `1` (use with batch mode). */
+/**
+ * When `0` (default): poll Blockstream for Configured **Coinbase deposit address(es)** to find
+ * large inflows to IBIT’s main receive path (signal source `coinbase_deposit`).
+ *
+ * When `1` (`IBIT_DISABLE_COINBASE_POLL=1`): **only that** Blockstream address scan is skipped.
+ * **Arkham batch / simple-pair (`ARKHAM_*`) is unchanged** — it still calls Arkham and then
+ * Blockstream `fetchTx` for each hash. Optional `IBIT_EXTRA_TXID` / `IBIT_POLL_SOURCE_WATCH`
+ * are also unaffected.
+ */
 export function isIbitCoinbasePollEnabled(): boolean {
   return process.env.IBIT_DISABLE_COINBASE_POLL !== '1';
 }

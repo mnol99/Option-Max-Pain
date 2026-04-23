@@ -125,6 +125,11 @@ export async function pollIbitTransfers(): Promise<{
   configured: boolean;
   watchAddresses: string[];
   coinbaseAddresses: string[];
+  /**
+   * `false` when `IBIT_DISABLE_COINBASE_POLL=1` — only the Blockstream *address list* poll for
+   * Coinbase deposit discovery is off. Arkham (batch or legacy) still runs.
+   */
+  coinbaseBlockstreamPoll: boolean;
   /** Broad 02:00–09:30 ET (legacy UI) */
   inLegacySignalWindow: boolean;
   /** Current time in active detection window (strict or legacy per config) */
@@ -169,6 +174,7 @@ export async function pollIbitTransfers(): Promise<{
   const nowPoll = new Date();
   const allowArkhamHttp =
     !isIbitArkhamPollScheduleEnabled() || isWithinArkhamPollWindowEt(nowPoll);
+  const coinbaseBlockstreamPoll = isIbitCoinbasePollEnabled();
 
   if (coinbaseAddresses.length === 0) {
     const key = getArkhamApiKey();
@@ -176,6 +182,7 @@ export async function pollIbitTransfers(): Promise<{
       configured: false,
       watchAddresses,
       coinbaseAddresses,
+      coinbaseBlockstreamPoll,
       inLegacySignalWindow: isWithinSignalWindowEt(),
       inDetectWindow: nowInActiveDetectWindow(),
       pollSourceWatchAddresses: pollWatch,
@@ -349,6 +356,7 @@ export async function pollIbitTransfers(): Promise<{
           configured: true,
           watchAddresses,
           coinbaseAddresses,
+          coinbaseBlockstreamPoll,
           inLegacySignalWindow: isWithinSignalWindowEt(),
           inDetectWindow: nowInActiveDetectWindow(),
           pollSourceWatchAddresses: pollWatch,
@@ -386,6 +394,7 @@ export async function pollIbitTransfers(): Promise<{
           configured: true,
           watchAddresses,
           coinbaseAddresses,
+          coinbaseBlockstreamPoll,
           inLegacySignalWindow: isWithinSignalWindowEt(),
           inDetectWindow: nowInActiveDetectWindow(),
           pollSourceWatchAddresses: pollWatch,
@@ -451,6 +460,7 @@ export async function pollIbitTransfers(): Promise<{
     configured: true,
     watchAddresses,
     coinbaseAddresses,
+    coinbaseBlockstreamPoll,
     inLegacySignalWindow: isWithinSignalWindowEt(),
     inDetectWindow: nowInActiveDetectWindow(),
     pollSourceWatchAddresses: pollWatch,
