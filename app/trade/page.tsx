@@ -355,7 +355,9 @@ export default function TradePage() {
         blkProcessedSignals?: string[];
       };
       if (p.activeStrategyId && TRADE_STRATEGIES.some((s) => s.id === p.activeStrategyId)) {
-        setActiveStrategyId(p.activeStrategyId);
+        setActiveStrategyId(
+          p.activeStrategyId === 'hourlySol' ? defaultStrategyId() : p.activeStrategyId
+        );
       }
       if (p.stateByStrategy) {
         setStateByStrategy(p.stateByStrategy);
