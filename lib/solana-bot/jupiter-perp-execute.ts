@@ -66,6 +66,19 @@ export type JupiterPerpExecuteResult =
   | { ok: true; data: { serializedTx: string } }
   | { ok: false; error: string; status?: number };
 
+/** Full close: createDecreasePositionMarketRequest (keepers execute decrease after). */
+export interface JupiterPerpDecreaseEntireParams {
+  side: 'long' | 'short';
+  sizeUsd: number;
+  leverage: number;
+  solPrice?: number;
+  btcPrice?: number;
+  ethPrice?: number;
+  asset: JupiterPerpAsset;
+  signAndSend: boolean;
+  owner?: string;
+}
+
 function resolveOwnerAndSigner(
   signAndSend: boolean,
   ownerStr: string | undefined
@@ -248,6 +261,156 @@ export async function jupiterPerpExecuteMarket(
     ...preInstructions,
     increaseIx,
     ...postInstructions,
+  ];
+
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const txMessage = new TransactionMessage({
+    payerKey: owner,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+  const tx = new VersionedTransaction(txMessage);
+
+  if (signAndSend && serverKeypair) {
+    tx.sign([serverKeypair]);
+    const raw = tx.serialize();
+    const sig = await sendAndConfirmRawTransaction(connection, Buffer.from(raw), {
+      commitment: 'confirmed',
+      skipPreflight: false,
+    });
+    return { ok: true, data: { signature: sig, owner: owner.toBase58() } };
+  }
+  if (signAndSend && !serverKeypair) {
+    return { ok: false, error: 'signAndSend requires server keypair' };
+  }
+  const serialized = Buffer.from(tx.serialize()).toString('base64');
+  return { ok: true, data: { serializedTx: serialized } };
+}
+
+/**
+ * Request full close of the open perp (same position PDA as increase). Uses createDecreasePositionMarketRequest
+ * with `entirePosition: true` (same size/notional as entry, used for sanity only).
+ */
+export async function jupiterPerpDecreaseEntire(
+  p: JupiterPerpDecreaseEntireParams
+): Promise<JupiterPerpExecuteResult> {
+  const {
+    side,
+    sizeUsd = 100,
+    leverage = 1.5,
+    solPrice,
+    btcPrice,
+    ethPrice,
+    asset = 'sol',
+    signAndSend = false,
+  } = p;
+
+  if (!side || (side !== 'long' && side !== 'short')) {
+    return { ok: false, error: 'Invalid: need side (long|short)' };
+  }
+
+  const r = resolveOwnerAndSigner(signAndSend, p.owner);
+  if (!r.ok) return r;
+  const { owner, serverKeypair } = r;
+
+  const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl);
+  const provider = new AnchorProvider(
+    connection,
+    { publicKey: owner } as any,
+    AnchorProvider.defaultOptions()
+  );
+  const program = new Program(minimalIdl as Idl, JUPITER_PERPETUALS_PROGRAM_ID, provider);
+
+  const useBtc = asset === 'btc';
+  const useEth = asset === 'eth';
+  const custody = useEth ? CUSTODY_ETH : useBtc ? CUSTODY_BTC : CUSTODY_SOL;
+  const collateralCustody =
+    side === 'short' ? CUSTODY_USDC : useBtc ? CUSTODY_BTC : useEth ? CUSTODY_ETH : CUSTODY_SOL;
+  const desiredMint =
+    side === 'short'
+      ? USDC_MINT
+      : useBtc
+        ? WBTC_MINT
+        : useEth
+          ? WETH_MINT
+          : NATIVE_MINT;
+
+  const position = getPositionPda(owner, custody, collateralCustody, side);
+  const counter = BigInt(Math.floor(Math.random() * 1_000_000_000));
+  const positionRequest = getPositionRequestPda(position, counter);
+  const receivingAccount = getAssociatedTokenAddressSync(desiredMint, owner);
+  const positionRequestAta = getAssociatedTokenAddressSync(desiredMint, positionRequest, true);
+  const perpetuals = getPerpetualsPda();
+
+  const leverageNum = Math.max(1, Math.min(100, leverage));
+  const collateralUsd = sizeUsd / leverageNum;
+  const sizeUsdDelta = new BN(Math.floor(sizeUsd * USD_SCALE));
+  const collateralUsdDelta = new BN(Math.floor(collateralUsd * USD_SCALE));
+  const priceSlippage = new BN(500);
+  const preInstructions: TransactionInstruction[] = [];
+  if (desiredMint.equals(USDC_MINT) || desiredMint.equals(WBTC_MINT) || desiredMint.equals(WETH_MINT)) {
+    preInstructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner,
+        receivingAccount,
+        owner,
+        desiredMint
+      )
+    );
+  } else {
+    preInstructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner,
+        receivingAccount,
+        owner,
+        NATIVE_MINT
+      )
+    );
+  }
+  preInstructions.push(
+    createAssociatedTokenAccountIdempotentInstruction(
+      owner,
+      positionRequestAta,
+      positionRequest,
+      desiredMint
+    )
+  );
+
+  const decreaseIx = await program.methods
+    .createDecreasePositionMarketRequest({
+      collateralUsdDelta,
+      sizeUsdDelta,
+      priceSlippage,
+      jupiterMinimumOut: null,
+      entirePosition: true,
+      counter: new BN(counter.toString()),
+    })
+    .accounts({
+      owner,
+      receivingAccount,
+      perpetuals,
+      pool: JLP_POOL_ACCOUNT_PUBKEY,
+      position,
+      positionRequest,
+      positionRequestAta,
+      custody,
+      collateralCustody,
+      desiredMint,
+      referral: JUPITER_PERPETUALS_PROGRAM_ID,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      eventAuthority: JUPITER_PERPETUALS_EVENT_AUTHORITY,
+      program: JUPITER_PERPETUALS_PROGRAM_ID,
+    })
+    .instruction();
+
+  const instructions = [
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100_000 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }),
+    ...preInstructions,
+    decreaseIx,
   ];
 
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
