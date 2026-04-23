@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   tickInsideBarServerQueued,
   getDefaultInsideBarPositionUsd,
+  getDefaultInsideBarLiveLeverage,
   type InsideBarServerSnapshot,
 } from '@/lib/solana-bot/inside-bar-server-state';
 
@@ -13,14 +14,27 @@ export async function POST(req: NextRequest) {
       clientSnapshot?: Partial<InsideBarServerSnapshot>;
       paperPositionSizeUsd?: number;
       useChartPrice?: boolean;
+      /** When true, position size and optional leverage are for *live* server-side ticks + Jupiter. */
+      liveMode?: boolean;
+      livePositionSizeUsd?: number;
+      liveLeverage?: number;
     };
+    const live = body.liveMode === true;
     const positionUsd =
-      typeof body.paperPositionSizeUsd === 'number' && body.paperPositionSizeUsd > 0
-        ? body.paperPositionSizeUsd
-        : getDefaultInsideBarPositionUsd();
+      live && typeof body.livePositionSizeUsd === 'number' && body.livePositionSizeUsd > 0
+        ? body.livePositionSizeUsd
+        : !live && typeof body.paperPositionSizeUsd === 'number' && body.paperPositionSizeUsd > 0
+          ? body.paperPositionSizeUsd
+          : getDefaultInsideBarPositionUsd();
 
     const result = await tickInsideBarServerQueued(body.clientSnapshot, positionUsd, {
       useChartPrice: body.useChartPrice === true,
+      liveLeverage:
+        live && typeof body.liveLeverage === 'number' && body.liveLeverage >= 1
+          ? body.liveLeverage
+          : live
+            ? getDefaultInsideBarLiveLeverage()
+            : undefined,
     });
 
     return NextResponse.json({

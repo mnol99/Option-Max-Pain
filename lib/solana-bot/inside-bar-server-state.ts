@@ -21,6 +21,7 @@ import {
   runInsideBarStep,
   type InsideBarRefs,
 } from '@/lib/solana-bot/inside-bar-engine';
+import { queueInsideBarLiveExecutions } from '@/lib/solana-bot/inside-bar-server-live-execute';
 
 const DEFAULT_POSITION_USD = 1000;
 
@@ -181,7 +182,7 @@ let tickChain: Promise<unknown> = Promise.resolve();
 export function tickInsideBarServerQueued(
   clientSnapshot: Partial<InsideBarServerSnapshot> | undefined,
   positionSizeUsd: number,
-  options?: { useChartPrice?: boolean }
+  options?: { useChartPrice?: boolean; liveLeverage?: number }
 ): Promise<{
   snapshot: InsideBarServerSnapshot & { lastTickAt: number };
   price: number;
@@ -191,7 +192,9 @@ export function tickInsideBarServerQueued(
   newTrades: Record<string, ClosedTrade[]>;
   warmupByStrategy: Record<string, number>;
 }> {
-  const task = tickChain.then(() => tickInsideBarServer(clientSnapshot, positionSizeUsd, options));
+  const task = tickChain.then(() =>
+    tickInsideBarServer(clientSnapshot, positionSizeUsd, options)
+  );
   tickChain = task.catch(() => {});
   return task;
 }
@@ -207,7 +210,7 @@ async function fetchPerUnderlyingPrice(
 export async function tickInsideBarServer(
   clientSnapshot: Partial<InsideBarServerSnapshot> | undefined,
   positionSizeUsd: number,
-  options?: { useChartPrice?: boolean }
+  options?: { useChartPrice?: boolean; liveLeverage?: number }
 ): Promise<{
   snapshot: InsideBarServerSnapshot & { lastTickAt: number };
   price: number;
@@ -274,6 +277,8 @@ export async function tickInsideBarServer(
     breakout: { ...serverState.breakout },
   };
 
+  const stateBefore = { ...serverState.stateByStrategy };
+
   const result = runInsideBarStep(
     INSIDE_BAR_STRATEGIES,
     serverState.stateByStrategy,
@@ -282,6 +287,22 @@ export async function tickInsideBarServer(
     priceByStrategy,
     priceTimeByStrategy,
     positionSizeUsd
+  );
+
+  const mSol = solStrat && priceByStrategy[solStrat.id] != null ? priceByStrategy[solStrat.id]! : 0;
+  const btcS = INSIDE_BAR_STRATEGIES.find((x) => strategyUnderlying(x) === 'btc');
+  const ethS = INSIDE_BAR_STRATEGIES.find((x) => strategyUnderlying(x) === 'eth');
+  const mBtc = btcS && priceByStrategy[btcS.id] != null ? priceByStrategy[btcS.id]! : 0;
+  const mEth = ethS && priceByStrategy[ethS.id] != null ? priceByStrategy[ethS.id]! : 0;
+  const liveLev = options?.liveLeverage != null && options.liveLeverage >= 1
+    ? Math.min(100, options.liveLeverage)
+    : getDefaultInsideBarLiveLeverage();
+  queueInsideBarLiveExecutions(
+    stateBefore,
+    result.stateByStrategy,
+    positionSizeUsd,
+    liveLev,
+    { sol: mSol, btc: mBtc, eth: mEth }
   );
 
   serverState.stateByStrategy = result.stateByStrategy;
@@ -319,4 +340,13 @@ export function getDefaultInsideBarPositionUsd(): number {
   if (raw == null || raw === '') return DEFAULT_POSITION_USD;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_POSITION_USD;
+}
+
+/** Server live Jupiter: leverage (default 1.5, max 100). */
+export function getDefaultInsideBarLiveLeverage(): number {
+  const raw = process.env.INSIDE_BAR_LIVE_LEVERAGE;
+  if (raw == null || raw === '') return 1.5;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return 1.5;
+  return Math.min(100, n);
 }

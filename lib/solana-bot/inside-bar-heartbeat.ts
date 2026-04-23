@@ -16,11 +16,15 @@ export function startInsideBarHeartbeat(): void {
 
   const run = async () => {
     try {
-      const { tickInsideBarServerQueued, getDefaultInsideBarPositionUsd } = await import(
-        './inside-bar-server-state'
-      );
+      const {
+        tickInsideBarServerQueued,
+        getDefaultInsideBarPositionUsd,
+        getDefaultInsideBarLiveLeverage,
+      } = await import('./inside-bar-server-state');
+      const serverLive = process.env.INSIDE_BAR_SERVER_LIVE_EXECUTE === '1';
       await tickInsideBarServerQueued(undefined, getDefaultInsideBarPositionUsd(), {
         useChartPrice: false,
+        liveLeverage: serverLive ? getDefaultInsideBarLiveLeverage() : undefined,
       });
     } catch {
       /* ignore */

@@ -63,6 +63,10 @@ const SERVER_TRADING_WALLET_PUBKEY =
     ? process.env.NEXT_PUBLIC_SOLANA_SERVER_TRADING_WALLET?.trim()
     : undefined;
 
+/** When 1, inside-bar *live* runs on the VPS (server tick + optional Jupiter), not in the browser. */
+const INSIDE_BAR_SERVER_LIVE =
+  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_INSIDE_BAR_SERVER_LIVE === '1';
+
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 /** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
@@ -1052,9 +1056,10 @@ export default function TradePage() {
     }
   }, [useChartPrice, candles]);
 
-  // Price polling — live mode only (paper: server /inside-bar/tick advances simulation)
+  // Price polling — live mode only, when the browser still drives inside-bar (not server-executed live)
   useEffect(() => {
     if (!liveMode) return;
+    if (INSIDE_BAR_SERVER_LIVE) return;
     const anyActive = INSIDE_BAR_STRATEGIES.some((s) => {
       const st = stateByStrategy[s.id];
       return (
@@ -1177,6 +1182,92 @@ export default function TradePage() {
     };
   }, [liveMode, paperPositionSizeUsd, useChartPrice]);
 
+  /**
+   * Live + server-executed inside-bar: same `/inside-bar/tick` path as paper, but with `liveMode` so
+   * the server advances state 24/7 and signs Jupiter entries when env allows — UI only mirrors the server.
+   */
+  useEffect(() => {
+    if (!liveMode || !INSIDE_BAR_SERVER_LIVE) return;
+    if (!sessionHydrated) return;
+    let cancelled = false;
+
+    const run = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch('/api/solana-bot/inside-bar/tick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            liveMode: true,
+            livePositionSizeUsd: liveAmountToRun,
+            liveLeverage: leverage,
+            useChartPrice,
+          }),
+        });
+        const json = await parseApiJson<{
+          success?: boolean;
+          data?: {
+            snapshot: InsideBarServerSnapshot & { lastTickAt: number };
+            price: number;
+            priceTime: number;
+            pricesByStrategy?: Record<string, { price: number; time: number }>;
+            candlesByStrategy: Record<string, OHLCVCandle[]>;
+            warmupByStrategy: Record<string, number>;
+          };
+        }>(res);
+        if (!json.success || !json.data || cancelled) return;
+        const d = json.data;
+        setPrice(d.price);
+        setPriceTime(d.priceTime);
+        if (d.pricesByStrategy) {
+          const mp: Partial<Record<InsideBarUnderlying, { price: number; time: number }>> = {};
+          for (const s of INSIDE_BAR_STRATEGIES) {
+            const row = d.pricesByStrategy[s.id];
+            if (!row) continue;
+            const u = strategyUnderlying(s);
+            if (mp[u] == null) mp[u] = { price: row.price, time: row.time };
+          }
+          setMarkPrices(mp);
+        }
+        setCandlesByStrategy((prev) => ({ ...prev, ...d.candlesByStrategy }));
+        setStateByStrategy(d.snapshot.stateByStrategy);
+        stateByStrategyRef.current = d.snapshot.stateByStrategy;
+        for (const s of INSIDE_BAR_STRATEGIES) {
+          enteringRef.current[s.id] = d.snapshot.entering[s.id] ?? false;
+          breakoutRef.current[s.id] = { ...d.snapshot.breakout[s.id] };
+        }
+        setBreakoutByStrategy(
+          Object.fromEntries(
+            INSIDE_BAR_STRATEGIES.map((s) => [s.id, { ...d.snapshot.breakout[s.id] }])
+          )
+        );
+        setTradesByStrategy((prev) => {
+          const next = { ...prev };
+          for (const s of INSIDE_BAR_STRATEGIES) {
+            next[s.id] = d.snapshot.tradesByStrategy[s.id] ?? [];
+          }
+          return next;
+        });
+        setWarmupByStrategy((prev) => ({ ...prev, ...d.warmupByStrategy }));
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Inside-bar live server sync failed');
+      }
+    };
+
+    void run();
+    const id = setInterval(run, INSIDE_BAR_SERVER_SYNC_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void run();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [liveMode, liveAmountToRun, leverage, useChartPrice, sessionHydrated]);
+
   /** Paper: next inside-bar tick should take server snapshot only (no client merge). */
   useEffect(() => {
     if (!liveMode) insideBarPaperServerAuthorityRef.current = true;
@@ -1189,6 +1280,7 @@ export default function TradePage() {
    */
   useEffect(() => {
     if (!liveMode) return;
+    if (INSIDE_BAR_SERVER_LIVE) return;
     if (paperSyncSkipRef.current) {
       paperSyncSkipRef.current = false;
       return;
@@ -1406,8 +1498,16 @@ export default function TradePage() {
               and performance (${paperPositionSizeUsd.toFixed(0)} / strategy in paper mode). Paper inside-bar
               logic runs on the server every few seconds.{' '}
               <span className="font-medium">60m</span> tabs pause Fri 5pm–Sun 3pm ET (flatten open);{' '}
-              <span className="font-medium">Daily</span> tabs run continuously. Live auto-execution: Jupiter
-              perps for SOL (native collateral), BTC (WBTC), and ETH (WETH); shorts use USDC.
+              <span className="font-medium">Daily</span> tabs run continuously.{' '}
+              {INSIDE_BAR_SERVER_LIVE ? (
+                <>
+                  With <code className="text-xs bg-gray-100 px-1">NEXT_PUBLIC_INSIDE_BAR_SERVER_LIVE=1</code>, live
+                  inside-bar runs on the server (same tick as paper); the page only mirrors state. Without it, live
+                  inside-bar runs in this tab.{' '}
+                </>
+              ) : null}
+              Live auto-execution: Jupiter perps for SOL (native collateral), BTC (WBTC), and ETH (WETH); shorts use
+              USDC.
             </>
           )}
         </p>
@@ -1489,9 +1589,21 @@ export default function TradePage() {
               <div>
                 <p className="text-green-800 font-medium">Live trading — server signing</p>
                 <p className="text-green-700 text-sm mt-1">
-                  Breakouts submit Jupiter Perp increase requests signed on the server (hot wallet). No browser
-                  approval. Fund only the dedicated server wallet; keep the keypair off git and restrict file
-                  permissions on the VPS.
+                  {INSIDE_BAR_SERVER_LIVE ? (
+                    <>
+                      Inside-bar breakouts are handled on the server (set{' '}
+                      <code className="text-xs bg-green-100 px-1">INSIDE_BAR_SERVER_LIVE_EXECUTE=1</code> and match
+                      size with <code className="text-xs bg-green-100 px-1">INSIDE_BAR_POSITION_USD</code>). BLK still
+                      uses this page&apos;s poll + Jupiter path. Fund the dedicated server wallet; keep the keypair off
+                      git.
+                    </>
+                  ) : (
+                    <>
+                      Breakouts submit Jupiter Perp increase requests signed on the server (hot wallet). No browser
+                      approval. Fund only the dedicated server wallet; keep the keypair off git and restrict file
+                      permissions on the VPS.
+                    </>
+                  )}
                 </p>
               </div>
             ) : (
