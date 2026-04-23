@@ -7,5 +7,7 @@ export async function register() {
     startInsideBarHeartbeat();
     const { startIbitPollHeartbeat } = await import('@/lib/solana-bot/ibit-poll-heartbeat');
     startIbitPollHeartbeat();
+    const { startHyperliquidHourlyHeartbeat } = await import('@/lib/hyperliquid/heartbeat');
+    startHyperliquidHourlyHeartbeat();
   }
 }
