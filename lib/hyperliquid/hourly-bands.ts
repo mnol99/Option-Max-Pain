@@ -87,15 +87,24 @@ function formatSizeForHl(sz: number, szDecimals: number): string {
   return n.toFixed(szDecimals);
 }
 
-export function getHourlyStateSnapshot(): HlHourlyState & { enabled: boolean } {
+export function getHourlyStateSnapshot(): HlHourlyState & {
+  enabled: boolean;
+  runEnabled: boolean;
+} {
   loadState();
-  return { ...memState, enabled: isHyperliquidHourlyEnabled() };
+  const runEnabled = getHlUiConfig().enabled === true;
+  return {
+    ...memState,
+    enabled: isHyperliquidHourlyEnabled() || runEnabled,
+    runEnabled,
+  };
 }
 
 /**
  * One tick: run if enabled, key not yet placed, and past `after` minute in UTC.
+ * @param opts.bypassMinuteGate - for "Try tick now" / debug: do not require UTC minute >= afterMin
  */
-export async function runHyperliquidHourlyTick(): Promise<{
+export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boolean }): Promise<{
   ok: boolean;
   skipped?: string;
   error?: string;
@@ -121,14 +130,18 @@ export async function runHyperliquidHourlyTick(): Promise<{
   const now = Date.now();
   const nowDt = new Date(now);
   const afterMin = ui.afterMinute ?? getHourlyAfterMinute();
-  if (nowDt.getUTCMinutes() < afterMin) {
-    return { ok: true, skipped: `wait until :${String(afterMin).padStart(2, '0')} UTC` };
+  if (!opts?.bypassMinuteGate && nowDt.getUTCMinutes() < afterMin) {
+    const s = { ok: true as const, skipped: `wait until :${String(afterMin).padStart(2, '0')} UTC` };
+    console.log('[hl-hourly]', s.skipped, `(now ${nowDt.toISOString()})`);
+    return s;
   }
 
   const hs = utcHourStartMs(now);
   loadState();
   if (memState.lastPlacedHourStartMs === hs) {
-    return { ok: true, skipped: 'already placed this hour' };
+    const s = { ok: true as const, skipped: 'already placed this hour' };
+    console.log('[hl-hourly]', s.skipped, `hs=${new Date(hs).toISOString()}`);
+    return s;
   }
 
     const coin = (ui.coin?.trim().toUpperCase() || getHourlyCoin());
@@ -242,14 +255,14 @@ export async function runHyperliquidHourlyTick(): Promise<{
       lastPlacedAtMs: now,
     };
     saveState();
-    return {
-      ok: true,
-      detail: `${coin} buy@${lo} sell@${hi} sz=${sz} ~$${notional.toFixed(2)} notional lev=${useLev}×`,
-    };
+    const det = `${coin} buy@${lo} sell@${hi} sz=${sz} ~$${notional.toFixed(2)} notional lev=${useLev}×`;
+    console.log('[hl-hourly] ok', det, nowDt.toISOString());
+    return { ok: true, detail: det };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     memState = { ...memState, lastRunMs: now, lastError: msg };
     saveState();
+    console.error('[hl-hourly] error', msg);
     return { ok: false, error: msg };
   }
 }

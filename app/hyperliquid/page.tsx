@@ -17,6 +17,7 @@ type Dashboard = {
   };
   hourly: {
     enabled: boolean;
+    runEnabled?: boolean;
     lastPlacedHourStartMs: number | null;
     lastRefHigh: string | null;
     lastRefLow: string | null;
@@ -131,7 +132,11 @@ export default function HyperliquidPage() {
   const tick = async () => {
     setErr(null);
     try {
-      const res = await fetch('/api/hyperliquid/tick', { method: 'POST' });
+      const res = await fetch('/api/hyperliquid/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bypassMinuteGate: true }),
+      });
       const j = await parseApiJson<{
         success?: boolean;
         result?: { ok?: boolean; error?: string; detail?: string; skipped?: string };
@@ -184,6 +189,7 @@ export default function HyperliquidPage() {
                 <li>Testnet: {d.testnet ? 'yes' : 'no'}</li>
                 <li>Heartbeat active if: (HL_HOURLY_BANDS_ENABLED=1 OR Run enabled below)</li>
                 <li>env HL_HOURLY_BANDS_ENABLED: {d.envHourlyEnabled ? '1' : '0'}</li>
+                <li>UI &quot;Run&quot; saved: {d.hourly.runEnabled ? 'yes' : 'no'}</li>
                 {d.margin && (
                   <>
                     <li>Account value: {d.margin.accountValue}</li>
