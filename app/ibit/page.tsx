@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import dynamic from 'next/dynamic';
-import { VersionedTransaction } from '@solana/web3.js';
 import { getCoverScheduleUtc, IBIT_TZ } from '@/lib/solana-bot/ibit-schedule';
 
 const WalletMultiButtonDynamic = dynamic(
@@ -18,10 +17,6 @@ const PRICE_MS = 10_000;
 
 const SERVER_TRADING_AUTOSIGN =
   typeof process !== 'undefined' && process.env.NEXT_PUBLIC_SOLANA_SERVER_AUTOSIGN === '1';
-const SERVER_TRADING_WALLET_PUBKEY =
-  typeof process !== 'undefined'
-    ? process.env.NEXT_PUBLIC_SOLANA_SERVER_TRADING_WALLET?.trim()
-    : undefined;
 
 interface PollPayload {
   configured: boolean;
@@ -84,8 +79,7 @@ function formatEtMin(min: number): string {
 }
 
 export default function IbitPage() {
-  const { publicKey, connected, wallet } = useWallet();
-  const { connection } = useConnection();
+  const { connected } = useWallet();
   const [mounted, setMounted] = useState(false);
   const [poll, setPoll] = useState<PollPayload | null>(null);
   const [btcPrice, setBtcPrice] = useState<number | null>(null);
@@ -140,59 +134,34 @@ export default function IbitPage() {
   }, [fetchBtc]);
 
   const executeBtc = useCallback(
-    async (side: 'long' | 'short', sizeUsd: number) => {
-      if (!SERVER_TRADING_AUTOSIGN && (!publicKey || !wallet?.adapter)) return;
-      setExecError(null);
-      const btc = btcPrice;
-      if (!btc || btc <= 0) {
-        setExecError('BTC price not loaded');
+    async (side: 'long' | 'short', sizeUsd: number, opts?: { reduceOnly?: boolean }) => {
+      if (!SERVER_TRADING_AUTOSIGN) {
+        setExecError(
+          'IBIT live uses Hyperliquid on the server: set HL_API_PRIVATE_KEY, HL_USER_ADDRESS, and NEXT_PUBLIC_SOLANA_SERVER_AUTOSIGN=1 in .env.local.'
+        );
         return;
       }
+      setExecError(null);
       try {
-        const res = await fetch('/api/solana-bot/execute', {
+        const res = await fetch('/api/hyperliquid/blk-execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(
-            SERVER_TRADING_AUTOSIGN
-              ? {
-                  side,
-                  signAndSend: true,
-                  ...(SERVER_TRADING_WALLET_PUBKEY ? { owner: SERVER_TRADING_WALLET_PUBKEY } : {}),
-                  sizeUsd,
-                  leverage,
-                  asset: 'btc',
-                  btcPrice: btc,
-                }
-              : {
-                  side,
-                  owner: publicKey!.toString(),
-                  sizeUsd,
-                  leverage,
-                  asset: 'btc',
-                  btcPrice: btc,
-                }
-          ),
+          body: JSON.stringify({
+            side,
+            notionalUsd: sizeUsd,
+            leverage,
+            reduceOnly: opts?.reduceOnly === true,
+          }),
         });
         const json = await res.json();
         if (!json.success) {
           setExecError(json.error || 'Execution failed');
-          return;
-        }
-        if (json.data?.signature) return;
-        if (json.data?.serializedTx) {
-          const tx = VersionedTransaction.deserialize(
-            Buffer.from(json.data.serializedTx, 'base64')
-          );
-          const sig = await wallet!.adapter!.sendTransaction(tx, connection, {
-            skipPreflight: false,
-          });
-          await connection.confirmTransaction(sig);
         }
       } catch (e) {
         setExecError(e instanceof Error ? e.message : 'Execution failed');
       }
     },
-    [publicKey, wallet, connection, leverage, btcPrice]
+    [SERVER_TRADING_AUTOSIGN, leverage]
   );
 
   /** New on-chain signals → optional auto short (live only, once per txid). */
@@ -201,8 +170,8 @@ export default function IbitPage() {
     for (const s of poll.signals) {
       if (processedSignalsRef.current.has(s.txid)) continue;
       processedSignalsRef.current.add(s.txid);
-      if (liveMode && (SERVER_TRADING_AUTOSIGN || connected) && s.blockTime > 0) {
-        void executeBtc('short', liveAmountUsd).then(() => {
+      if (liveMode && SERVER_TRADING_AUTOSIGN && s.blockTime > 0) {
+        void executeBtc('short', liveAmountUsd * leverage).then(() => {
           setShortActive(true);
           setEntryNotionalUsd(liveAmountUsd);
           setCoveredSlots(0);
@@ -215,7 +184,7 @@ export default function IbitPage() {
         setSignalTxid(s.txid);
       }
     }
-  }, [poll, liveMode, connected, liveAmountUsd, executeBtc, SERVER_TRADING_AUTOSIGN]);
+  }, [poll, liveMode, liveAmountUsd, executeBtc, leverage, SERVER_TRADING_AUTOSIGN]);
 
   const coverScheduleForActive = useMemo(() => {
     if (!signalTxid) return null;
@@ -226,7 +195,7 @@ export default function IbitPage() {
     return sig?.coverScheduleUtc?.length ? sig.coverScheduleUtc : null;
   }, [signalTxid, manualScheduleAnchor, poll]);
 
-  /** Schedule 25 cover slices once per signal (paper = simulate; live = Jupiter longs). */
+  /** Schedule 25 cover slices once per signal (paper = simulate; live = Hyperliquid longs, reduce-only). */
   useEffect(() => {
     if (!shortActive || !signalTxid) return;
     if (scheduledTxRef.current === signalTxid) return;
@@ -238,7 +207,7 @@ export default function IbitPage() {
     coverTimersRef.current = [];
     scheduledTxRef.current = signalTxid;
 
-    const slice = entryNotionalUsd / COVER_SLOTS;
+    const slice = (entryNotionalUsd * leverage) / COVER_SLOTS;
     const now = Date.now();
 
     const bumpCover = () => {
@@ -258,7 +227,7 @@ export default function IbitPage() {
       const delay = Math.max(0, at - now);
       const timer = setTimeout(() => {
         if (liveMode) {
-          void executeBtc('long', slice).then(bumpCover);
+          void executeBtc('long', slice, { reduceOnly: true }).then(bumpCover);
         } else {
           bumpCover();
         }
@@ -275,6 +244,7 @@ export default function IbitPage() {
     signalTxid,
     liveMode,
     entryNotionalUsd,
+    leverage,
     executeBtc,
     coverScheduleForActive,
   ]);
@@ -423,10 +393,8 @@ export default function IbitPage() {
             </div>
           </div>
           <p className="text-xs text-gray-500">
-            Short uses USDC collateral; each cover slice is a long BTC perp for{' '}
-            {(liveAmountUsd / COVER_SLOTS).toFixed(2)} USD notional (1/{COVER_SLOTS} of entry).
-            Long legs require <strong>WBTC</strong> in the wallet (mint{' '}
-            <code className="text-[10px]">3NZ9…qmJh</code>)—fund the ATA or the cover txs can fail.
+            Live execution uses the same Hyperliquid API key as the hourly bot: margin is USDC in your HL account;
+            notional = Notional ($) × Leverage; each cover is a reduce-only long for 1/{COVER_SLOTS} of that total.
           </p>
           {execError && <p className="text-sm text-red-600">{execError}</p>}
           <div className="flex flex-wrap gap-2">
@@ -436,7 +404,7 @@ export default function IbitPage() {
               onClick={() => {
                 if (shortActive) return;
                 scheduledTxRef.current = null;
-                void executeBtc('short', liveAmountUsd).then(() => {
+                void executeBtc('short', liveAmountUsd * leverage).then(() => {
                   setShortActive(true);
                   setEntryNotionalUsd(liveAmountUsd);
                   setCoveredSlots(0);
@@ -452,8 +420,8 @@ export default function IbitPage() {
               type="button"
               disabled={!liveMode || (!SERVER_TRADING_AUTOSIGN && !connected) || !shortActive}
               onClick={() => {
-                const slice = entryNotionalUsd / COVER_SLOTS;
-                void executeBtc('long', slice).then(() =>
+                const slice = (entryNotionalUsd * leverage) / COVER_SLOTS;
+                void executeBtc('long', slice, { reduceOnly: true }).then(() =>
                   setCoveredSlots((c) => {
                     const next = Math.min(COVER_SLOTS, c + 1);
                     if (next >= COVER_SLOTS) {

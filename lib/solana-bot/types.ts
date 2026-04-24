@@ -105,8 +105,10 @@ export interface ClosedTrade {
   ibitSignalSource?: string;
   /** IBIT: Arkham GET /transfers `base` when signal came from Arkham */
   ibitArkhamEntityBase?: string;
-  /** BLK: Jupiter increase side for this row (hedge cover = opposite of session) */
-  blkJupiterOrderSide?: 'long' | 'short';
+  /** BLK: Hyperliquid perp order side (hedge cover = opposite of session) */
+  blkHedgePerpOrderSide?: 'long' | 'short';
+  /** BLK: reduce-only (cover slices) */
+  blkReduceOnly?: boolean;
   /** Pattern setup for audit (breakout levels, TP targets) */
   setup?: Pick<
     PatternSetup,

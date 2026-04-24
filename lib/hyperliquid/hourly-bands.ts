@@ -18,6 +18,7 @@ import {
 } from '@/lib/hyperliquid/config';
 import { getHyperliquidClients, clearHyperliquidClientsCache } from '@/lib/hyperliquid/hl-clients';
 import { getHlUiConfig } from '@/lib/hyperliquid/ui-config';
+import { formatSizeForHl } from '@/lib/hyperliquid/hl-order-utils';
 
 const STATE_DIR = path.join(process.cwd(), '.data');
 const STATE_FILE = 'hl-hourly-bands.json';
@@ -76,15 +77,6 @@ function utcHourStartMs(ts: number): number {
   const d = new Date(ts);
   d.setUTCHours(d.getUTCHours(), 0, 0, 0);
   return d.getTime();
-}
-
-/** Format size in coin units for HL `s` (respect szDecimals). */
-function formatSizeForHl(sz: number, szDecimals: number): string {
-  if (!(sz > 0)) return '0';
-  const t = 10 ** szDecimals;
-  const n = Math.floor(sz * t) / t;
-  if (n <= 0) return '0';
-  return n.toFixed(szDecimals);
 }
 
 export function getHourlyStateSnapshot(): HlHourlyState & {

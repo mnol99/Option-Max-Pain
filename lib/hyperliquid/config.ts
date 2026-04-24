@@ -69,3 +69,14 @@ export function getHourlyLoopMs(): number {
 export function getHourlyUseUtcCandles(): boolean {
   return process.env.HL_HOURLY_UTC !== '0';
 }
+
+// --- BLK (IBIT) live execution on Hyperliquid BTC perp ---
+
+export function getBlkHyperliquidCoin(): string {
+  return (process.env.BLK_HL_COIN ?? 'BTC').trim().toUpperCase();
+}
+
+/** Isolated perp for BLK; cross when unset/0. */
+export function getBlkHyperliquidIsolated(): boolean {
+  return process.env.BLK_HL_ISOLATED === '1';
+}

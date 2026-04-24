@@ -1,6 +1,7 @@
 /**
  * BLK paper: IBIT signal → short sized to collateral × leverage (USD notional) → covers on schedule.
  * On-chain main output is recorded for audit only; position BTC = notionalUsd / entry price.
+ * Live perp execution (Hyperliquid) uses the same notional and schedule as this paper sim.
  */
 
 import {
@@ -215,7 +216,7 @@ function sessionOpenTrade(prev: BlkPaperState): ClosedTrade {
   return {
     id: newTradeId(),
     side,
-    blkJupiterOrderSide: side,
+    blkHedgePerpOrderSide: side,
     entryPrice: entry,
     entryTime: t,
     exitPrice: entry,
@@ -294,15 +295,16 @@ export function processBlkPaperTick(
   const idx = next.nextSliceIndex;
   const coverExitTimeSec = Math.floor(slotEndMs / 1000);
   /** Short session: reduce short with a long. Long session: reduce long with a short. */
-  const coverJupiterSide: 'long' | 'short' = isLong ? 'short' : 'long';
+  const coverHedgePerpSide: 'long' | 'short' = isLong ? 'short' : 'long';
 
   next.nextSliceIndex += 1;
   next.cumulativePnlUsd = cumulative;
 
   closedTrades.push({
     id: newTradeId(),
-    side: coverJupiterSide,
-    blkJupiterOrderSide: coverJupiterSide,
+    side: coverHedgePerpSide,
+    blkHedgePerpOrderSide: coverHedgePerpSide,
+    blkReduceOnly: true,
     entryPrice: entry,
     entryTime: next.entryTime!,
     exitPrice: btcPrice,
