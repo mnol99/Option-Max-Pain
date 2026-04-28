@@ -25,9 +25,11 @@ const STATE_FILE = 'hl-hourly-bands.json';
 
 export interface HlHourlyState {
   v: 1;
+  /** Start of UTC hour we last booked a placement attempt — stops heartbeat from re-submitting until next hour even if HL calls fail mid-run. */
   lastPlacedHourStartMs: number | null;
   lastRunMs: number | null;
   lastError: string | null;
+  /** Last successful placement refs (audit / UI); only set when both orders acknowledged. */
   lastRefHigh: string | null;
   lastRefLow: string | null;
   lastBuyOid: number | null;
@@ -77,6 +79,13 @@ function utcHourStartMs(ts: number): number {
   const d = new Date(ts);
   d.setUTCHours(d.getUTCHours(), 0, 0, 0);
   return d.getTime();
+}
+
+/** HL `statuses` row is success if it has `resting` or `filled` (not bare `error`). */
+function hyperliquidOrderLegOk(s: unknown): boolean {
+  if (!s || typeof s !== 'object') return false;
+  const x = s as Record<string, unknown>;
+  return 'resting' in x || 'filled' in x;
 }
 
 export function getHourlyStateSnapshot(): HlHourlyState & {
@@ -136,6 +145,13 @@ export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boole
     return s;
   }
 
+  /**
+   * Book this UTC hour immediately so heartbeat/API retries cannot cancel+re-submit every interval
+   * when a downstream step fails after one order rests (skewed resting sell-only loop).
+   */
+  memState = { ...memState, lastPlacedHourStartMs: hs, lastRunMs: now, lastError: null };
+  saveState();
+
     const coin = (ui.coin?.trim().toUpperCase() || getHourlyCoin());
     const collateral = ui.collateralUsd ?? getHourlyCollateralUsd();
     const leverage = ui.leverage ?? getHourlyLeverage();
@@ -179,12 +195,18 @@ export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boole
       candles.find((x) => x.t === refStart) ??
       (candles.length > 0 ? candles[candles.length - 1]! : null);
     if (!c) {
-      return { ok: false, error: 'No 1h candle for previous hour' };
+      const err = 'No 1h candle for previous hour';
+      memState = { ...memState, lastError: err };
+      saveState();
+      return { ok: false, error: err };
     }
     const hi = Number(c.h);
     const lo = Number(c.l);
     if (!(hi > lo) || !(lo > 0)) {
-      return { ok: false, error: 'Invalid high/low' };
+      const err = 'Invalid high/low';
+      memState = { ...memState, lastError: err };
+      saveState();
+      return { ok: false, error: err };
     }
 
     const userAddr = getHyperliquidUserAddress() ?? wallet.address;
@@ -218,17 +240,37 @@ export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boole
       grouping: 'na',
     });
 
-    if (orderRes.status === 'ok' && orderRes.response?.data?.statuses) {
-      const st = orderRes.response.data.statuses;
-      const errs: string[] = [];
-      for (const s of st) {
-        if (s && typeof s === 'object' && 'error' in s) {
-          errs.push(String((s as { error: string }).error));
-        }
+    /** Require both HL legs to acknowledge; otherwise we would “succeed” with one resting ask and retry spam. */
+    const statuses =
+      orderRes.status === 'ok' && orderRes.response?.type === 'order'
+        ? orderRes.response.data?.statuses
+        : undefined;
+    if (!statuses || statuses.length !== 2) {
+      const err =
+        orderRes.status !== 'ok'
+          ? `exchange.order failed (${String(orderRes.status)})`
+          : 'Unexpected order statuses length';
+      memState = { ...memState, lastError: err };
+      saveState();
+      return { ok: false, error: err };
+    }
+    const errs: string[] = [];
+    for (const row of statuses) {
+      if (row && typeof row === 'object' && 'error' in row) {
+        errs.push(String((row as { error: string }).error));
       }
-      if (errs.length) {
-        return { ok: false, error: errs.join('; ') };
-      }
+    }
+    if (errs.length) {
+      const err = errs.join('; ');
+      memState = { ...memState, lastError: err };
+      saveState();
+      return { ok: false, error: err };
+    }
+    if (!statuses.every(hyperliquidOrderLegOk)) {
+      const err = 'HL did not acknowledge both band orders (avoid partial-resting-loop)';
+      memState = { ...memState, lastError: err };
+      saveState();
+      return { ok: false, error: err };
     }
 
     const open2 = await info.frontendOpenOrders({ user: userAddr, dex: '' });
@@ -237,7 +279,6 @@ export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boole
 
     memState = {
       ...memState,
-      lastPlacedHourStartMs: hs,
       lastRunMs: now,
       lastError: null,
       lastRefHigh: String(hi),
