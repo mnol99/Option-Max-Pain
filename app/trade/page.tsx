@@ -1570,9 +1570,11 @@ export default function TradePage() {
                     <>
                       Inside-bar breakouts are handled on the server (set{' '}
                       <code className="text-xs bg-green-100 px-1">INSIDE_BAR_SERVER_LIVE_EXECUTE=1</code> and match
-                      size with <code className="text-xs bg-green-100 px-1">INSIDE_BAR_POSITION_USD</code>). BLK still
-                      uses this page&apos;s poll + Jupiter path. Fund the dedicated server wallet; keep the keypair off
-                      git.
+                      size with <code className="text-xs bg-green-100 px-1">INSIDE_BAR_POSITION_USD</code>).{' '}
+                      <strong>BLK</strong> tab: same IBIT poll; live orders go to{' '}
+                      <strong>Hyperliquid BTC perp</strong> via <code className="text-xs bg-green-100 px-1">HL_*</code> /
+                      <code className="text-xs bg-green-100 px-1">HYPERLIQUID_API_PRIVATE_KEY</code> — fund USDC margin
+                      there. Solana wallet not required on this page when autosign is on; keep server keys off git.
                     </>
                   ) : (
                     <>
