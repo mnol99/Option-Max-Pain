@@ -67,6 +67,14 @@ const SERVER_TRADING_WALLET_PUBKEY =
 const INSIDE_BAR_SERVER_LIVE =
   typeof process !== 'undefined' && process.env.NEXT_PUBLIC_INSIDE_BAR_SERVER_LIVE === '1';
 
+/**
+ * When 1: no VPS inside-bar heartbeat, no `/trade` paper/live inside-bar polls or client breakouts —
+ * use for **BLK (+ IBIT poll)** / Hyperliquid only. Set in `.env.local`, then **`npm run build`** + restart.
+ */
+const INSIDE_BAR_TRADE_AUTOMATION_DISABLED =
+  typeof process !== 'undefined' &&
+  process.env.NEXT_PUBLIC_INSIDE_BAR_DISABLE_TRADE_AUTOMATION === '1';
+
 /** Survive navigate away + back (e.g. /mean-reversion) in the same tab */
 const TRADE_SESSION_STORAGE_KEY = 'solana-bot-trade-session-v6';
 /** Survives tab refresh (unlike sessionStorage) — dedupe IBIT txids for BLK */
@@ -1018,8 +1026,9 @@ export default function TradePage() {
 
   useEffect(() => setMounted(true), []);
 
-  // Initial load and OHLCV polling
+  // Initial load and OHLCV polling (inside-bar tabs only; omit when BLK-only automation)
   useEffect(() => {
+    if (INSIDE_BAR_TRADE_AUTOMATION_DISABLED) return;
     fetchOHLCV();
     const ohlcvInterval = setInterval(fetchOHLCV, OHLCV_POLL_MS);
     return () => clearInterval(ohlcvInterval);
@@ -1036,6 +1045,7 @@ export default function TradePage() {
   // Price polling — live mode only, when the browser still drives inside-bar (not server-executed live)
   useEffect(() => {
     if (!liveMode) return;
+    if (INSIDE_BAR_TRADE_AUTOMATION_DISABLED) return;
     if (INSIDE_BAR_SERVER_LIVE) return;
     const anyActive = INSIDE_BAR_STRATEGIES.some((s) => {
       const st = stateByStrategy[s.id];
@@ -1053,6 +1063,7 @@ export default function TradePage() {
 
   /** Paper mode: server-side inside-bar tick (survives browser sleep / tab suspend). */
   useEffect(() => {
+    if (INSIDE_BAR_TRADE_AUTOMATION_DISABLED) return;
     if (liveMode) return;
     let cancelled = false;
 
@@ -1164,6 +1175,7 @@ export default function TradePage() {
    * the server advances state 24/7 and signs Jupiter entries when env allows — UI only mirrors the server.
    */
   useEffect(() => {
+    if (INSIDE_BAR_TRADE_AUTOMATION_DISABLED) return;
     if (!liveMode || !INSIDE_BAR_SERVER_LIVE) return;
     if (!sessionHydrated) return;
     let cancelled = false;
@@ -1257,6 +1269,7 @@ export default function TradePage() {
    */
   useEffect(() => {
     if (!liveMode) return;
+    if (INSIDE_BAR_TRADE_AUTOMATION_DISABLED) return;
     if (INSIDE_BAR_SERVER_LIVE) return;
     if (paperSyncSkipRef.current) {
       paperSyncSkipRef.current = false;

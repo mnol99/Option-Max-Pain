@@ -7,6 +7,15 @@
 const DEFAULT_MS = 3000;
 
 export function startInsideBarHeartbeat(): void {
+  /** Same as `/trade` BLK-only mode: NEXT_PUBLIC_* (after `npm run build`) + optional server-only duplicate for heartbeat after restart only. */
+  if (
+    process.env.NEXT_PUBLIC_INSIDE_BAR_DISABLE_TRADE_AUTOMATION === '1' ||
+    process.env.INSIDE_BAR_DISABLE_TRADE_AUTOMATION === '1'
+  ) {
+    console.log('[inside-bar-heartbeat] disabled (inside-bar automation off — BLK/IBIT unaffected)');
+    return;
+  }
+
   const ms = (() => {
     const raw = process.env.INSIDE_BAR_HEARTBEAT_MS;
     if (raw == null || raw === '') return DEFAULT_MS;
