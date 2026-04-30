@@ -12,7 +12,7 @@ export function startInsideBarHeartbeat(): void {
     process.env.NEXT_PUBLIC_INSIDE_BAR_DISABLE_TRADE_AUTOMATION === '1' ||
     process.env.INSIDE_BAR_DISABLE_TRADE_AUTOMATION === '1'
   ) {
-    console.log('[inside-bar-heartbeat] disabled (inside-bar automation off — BLK/IBIT unaffected)');
+    console.warn('[inside-bar-heartbeat] disabled — no 60m/Daily server ticks (BLK + IBIT poll unchanged)');
     return;
   }
 
@@ -22,6 +22,8 @@ export function startInsideBarHeartbeat(): void {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 1000 ? n : DEFAULT_MS;
   })();
+
+  console.warn(`[inside-bar-heartbeat] started every ${ms}ms`);
 
   const run = async () => {
     try {
