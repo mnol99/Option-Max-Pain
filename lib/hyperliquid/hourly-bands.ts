@@ -1,6 +1,7 @@
 /**
- * Per-hour: cancel prior band orders, set leverage, place buy limit at prior hour low + sell limit at prior hour high.
- * Notional = HL_COLLATERAL_USD * HL_LEVERAGE; size in coin = notional / mark (approx).
+ * Per-hour: optionally cancel prior open limits for the symbol, then set leverage and place buy at prior-hour low +
+ * sell at prior-hour high (GTC).
+ * Unless HL_HOURLY_CANCEL_PRIOR_BANDS=1, existing band orders remain working (multiple brackets can stack — watch margin).
  */
 
 import { cancel } from '@nktkas/hyperliquid/api/exchange';
@@ -15,6 +16,7 @@ import {
   getHourlyUseUtcCandles,
   getHyperliquidUserAddress,
   isHyperliquidHourlyEnabled,
+  getHourlyCancelPriorBands,
 } from '@/lib/hyperliquid/config';
 import { getHyperliquidClients, clearHyperliquidClientsCache } from '@/lib/hyperliquid/hl-clients';
 import { getHlUiConfig } from '@/lib/hyperliquid/ui-config';
@@ -210,10 +212,12 @@ export async function runHyperliquidHourlyTick(opts?: { bypassMinuteGate?: boole
     }
 
     const userAddr = getHyperliquidUserAddress() ?? wallet.address;
-    const open = await info.frontendOpenOrders({ user: userAddr, dex: '' });
-    const toCancel = open.filter((o) => o.coin === coin).map((o) => ({ a: uidx, o: o.oid }));
-    if (toCancel.length > 0) {
-      await cancel({ transport: clients.transport, wallet: clients.wallet }, { cancels: toCancel });
+    if (getHourlyCancelPriorBands()) {
+      const open = await info.frontendOpenOrders({ user: userAddr, dex: '' });
+      const toCancel = open.filter((o) => o.coin === coin).map((o) => ({ a: uidx, o: o.oid }));
+      if (toCancel.length > 0) {
+        await cancel({ transport: clients.transport, wallet: clients.wallet }, { cancels: toCancel });
+      }
     }
 
     await exchange.updateLeverage({ asset: uidx, isCross, leverage: useLev });

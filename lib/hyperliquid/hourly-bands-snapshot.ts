@@ -1,6 +1,7 @@
 import { HttpTransport, InfoClient } from '@nktkas/hyperliquid';
 import {
   getHourlyAfterMinute,
+  getHourlyCancelPriorBands,
   getHourlyCoin,
   getHourlyCollateralUsd,
   getHourlyLeverage,
@@ -20,6 +21,8 @@ export async function getHyperliquidDashboardData(): Promise<{
   user: `0x${string}` | null;
   testnet: boolean;
   envHourlyEnabled: boolean;
+  /** When true, each hour cancels open limits on the symbol before new bands (opt-in). */
+  envHourlyCancelPriorBands: boolean;
   config: {
     coin: string;
     collateralUsd: number;
@@ -62,6 +65,7 @@ export async function getHyperliquidDashboardData(): Promise<{
       user: user ?? null,
       testnet: getHyperliquidTestnet(),
       envHourlyEnabled: isHyperliquidHourlyEnabled(),
+      envHourlyCancelPriorBands: getHourlyCancelPriorBands(),
       config: { coin, collateralUsd: collateral, leverage: lev, afterMinute: afterMin, notionalUsd: collateral * lev },
       hourly: st,
       openOrders: [],
@@ -97,6 +101,7 @@ export async function getHyperliquidDashboardData(): Promise<{
       user: addr,
       testnet: getHyperliquidTestnet(),
       envHourlyEnabled: isHyperliquidHourlyEnabled(),
+      envHourlyCancelPriorBands: getHourlyCancelPriorBands(),
       config: { coin, collateralUsd: collateral, leverage: lev, afterMinute: afterMin, notionalUsd: collateral * lev },
       hourly: st,
       openOrders: open.map((o) => ({
@@ -119,6 +124,7 @@ export async function getHyperliquidDashboardData(): Promise<{
       user: user ?? null,
       testnet: getHyperliquidTestnet(),
       envHourlyEnabled: isHyperliquidHourlyEnabled(),
+      envHourlyCancelPriorBands: getHourlyCancelPriorBands(),
       config: { coin, collateralUsd: collateral, leverage: lev, afterMinute: afterMin, notionalUsd: collateral * lev },
       hourly: st,
       openOrders: [],

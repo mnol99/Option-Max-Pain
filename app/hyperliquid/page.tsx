@@ -8,6 +8,7 @@ type Dashboard = {
   user: string | null;
   testnet: boolean;
   envHourlyEnabled: boolean;
+  envHourlyCancelPriorBands?: boolean;
   config: {
     coin: string;
     collateralUsd: number;
@@ -168,12 +169,15 @@ export default function HyperliquidPage() {
         </header>
 
         <p className="text-sm text-slate-600 mb-4">
-          Each <strong>UTC</strong> hour, after the configured minute, the server cancels your open
-          limit orders for the chosen symbol, sets leverage, and places a <strong>buy</strong> limit at
-          the <strong>previous hour&apos;s low</strong> and a <strong>sell</strong> limit at the
-          <strong> previous hour&apos;s high</strong>. Notional = collateral × leverage (e.g. $50 ×
-          2× = ~$100). Requires <code className="bg-slate-100 px-1">HL_API_PRIVATE_KEY</code> (0x EVM) on
-          the server — not a Solana address.
+          Each <strong>UTC</strong> hour, after the configured minute, the server sets leverage and places a{' '}
+          <strong>buy</strong> limit at the <strong>previous hour&apos;s low</strong> and a <strong>sell</strong>{' '}
+          limit at the <strong>previous hour&apos;s high</strong> (GTC). By default{' '}
+          <strong>prior unrefilled band limits stay on the book</strong> until they fill or you cancel manually
+          (hours can stack — watch margin). Set{' '}
+          <code className="bg-slate-100 px-1">HL_HOURLY_CANCEL_PRIOR_BANDS=1</code> on the server to restore old
+          behavior: cancel existing open limits for that coin before each new hourly pair. Notional ≈ collateral ×
+          leverage. Requires <code className="bg-slate-100 px-1">HL_API_PRIVATE_KEY</code> (0x EVM) on the server —
+          not Solana.
         </p>
 
         {err && (
@@ -189,7 +193,10 @@ export default function HyperliquidPage() {
                 <li>Testnet: {d.testnet ? 'yes' : 'no'}</li>
                 <li>Heartbeat active if: (HL_HOURLY_BANDS_ENABLED=1 OR Run enabled below)</li>
                 <li>env HL_HOURLY_BANDS_ENABLED: {d.envHourlyEnabled ? '1' : '0'}</li>
-                <li>UI &quot;Run&quot; saved: {d.hourly.runEnabled ? 'yes' : 'no'}</li>
+                <li>
+                  env HL_HOURLY_CANCEL_PRIOR_BANDS:{' '}
+                  {d.envHourlyCancelPriorBands === true ? '1 (cancel before new bracket)' : '0 (keep working orders)'}
+                </li>
                 {d.margin && (
                   <>
                     <li>Account value: {d.margin.accountValue}</li>

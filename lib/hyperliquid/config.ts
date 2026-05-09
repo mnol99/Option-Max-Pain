@@ -65,9 +65,9 @@ export function getHourlyLoopMs(): number {
   return Number.isFinite(n) && n >= 5000 ? n : 30_000;
 }
 
-/** Use closed 1h candle in UTC. Set HL_HOURLY_UTC=0 and HL_TIMEZONE=America/New_York for local hour boundaries (future). */
-export function getHourlyUseUtcCandles(): boolean {
-  return process.env.HL_HOURLY_UTC !== '0';
+/** When `1`, hourly tick cancels existing open limits on that coin before placing the new bracket. Default off — prior bands stay until fill or manual cancel (stacking exposure). */
+export function getHourlyCancelPriorBands(): boolean {
+  return process.env.HL_HOURLY_CANCEL_PRIOR_BANDS === '1';
 }
 
 // --- BLK (IBIT) live execution on Hyperliquid BTC perp ---
