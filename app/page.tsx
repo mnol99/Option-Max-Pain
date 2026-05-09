@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { calculateDeltaManagement, OptionData, calculateNextExpirationMaxPain, calculateMaxPainForAllExpirations } from '@/lib/delta-calculator';
+import { calculateDeltaManagement, OptionData, DeltaData, calculateNextExpirationMaxPain, calculateMaxPainForAllExpirations } from '@/lib/delta-calculator';
 import DeltaVisualization from '@/components/DeltaVisualization';
-import { OptionsChain } from '@/lib/options-api';
+import { OptionsChain, OptionContract } from '@/lib/options-api';
 
 export default function Home() {
   const [ticker, setTicker] = useState('');
@@ -70,13 +70,13 @@ export default function Home() {
 
       // Combine calls and puts
       const allOptions: OptionData[] = [
-        ...chain.calls.map(c => ({
+        ...chain.calls.map((c: OptionContract) => ({
           strike: c.strike,
           openInterest: c.openInterest,
           type: 'call' as const,
           expiration: c.expiration,
         })),
-        ...chain.puts.map(p => ({
+        ...chain.puts.map((p: OptionContract) => ({
           strike: p.strike,
           openInterest: p.openInterest,
           type: 'put' as const,
@@ -119,12 +119,12 @@ export default function Home() {
         console.log('');
         
         for (const strike of debugStrikes) {
-          const putsAtStrike = chain.puts.filter(p => Math.abs(p.strike - strike) < 1);
-          const callsAtStrike = chain.calls.filter(c => Math.abs(c.strike - strike) < 1);
-          const deltaAtStrike = deltas.filter(d => Math.abs(d.strike - strike) < 1);
+          const putsAtStrike = chain.puts.filter((p: OptionContract) => Math.abs(p.strike - strike) < 1);
+          const callsAtStrike = chain.calls.filter((c: OptionContract) => Math.abs(c.strike - strike) < 1);
+          const deltaAtStrike = deltas.filter((d: DeltaData) => Math.abs(d.strike - strike) < 1);
           
-          const putOI = putsAtStrike.reduce((sum, p) => sum + p.openInterest, 0);
-          const callOI = callsAtStrike.reduce((sum, c) => sum + c.openInterest, 0);
+          const putOI = putsAtStrike.reduce((sum: number, p: OptionContract) => sum + p.openInterest, 0);
+          const callOI = callsAtStrike.reduce((sum: number, c: OptionContract) => sum + c.openInterest, 0);
           
           console.log(`--- Strike $${strike} ---`);
           console.log(`Put OI: ${putOI.toLocaleString()} contracts`);
@@ -132,8 +132,8 @@ export default function Home() {
           console.log(`Total OI: ${(putOI + callOI).toLocaleString()} contracts`);
           
           if (deltaAtStrike.length > 0) {
-            const putDelta = deltaAtStrike.find(d => d.type === 'put');
-            const callDelta = deltaAtStrike.find(d => d.type === 'call');
+            const putDelta = deltaAtStrike.find((d: DeltaData) => d.type === 'put');
+            const callDelta = deltaAtStrike.find((d: DeltaData) => d.type === 'call');
             
             if (putDelta) {
               console.log(`Put Delta: ${putDelta.delta.toFixed(4)}`);
@@ -144,7 +144,7 @@ export default function Home() {
               console.log(`Call Hedging Shares: ${callDelta.hedgingShares.toLocaleString()} (${callDelta.hedgingShares < 0 ? 'SELL' : 'BUY'} pressure)`);
             }
             
-            const netHedging = deltaAtStrike.reduce((sum, d) => sum + d.hedgingShares, 0);
+            const netHedging = deltaAtStrike.reduce((sum: number, d: DeltaData) => sum + d.hedgingShares, 0);
             const buyPressure = netHedging > 0 ? netHedging : 0;
             const sellPressure = netHedging < 0 ? Math.abs(netHedging) : 0;
             
@@ -214,6 +214,9 @@ export default function Home() {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-gray-900">Option Max Pain</h1>
             <div className="flex items-center gap-4">
+              <a href="/trade" className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+                SOL Trading Bot
+              </a>
               <a
                 href="https://optionmaxpain.com"
                 className="text-sm text-gray-600 hover:text-gray-900"

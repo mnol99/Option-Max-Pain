@@ -156,7 +156,7 @@ export default function DeltaVisualization({ optionsChain, deltaData }: DeltaVis
       const priceDiff = Math.abs(strikeValue - optionsChain.spotPrice);
       const range = zoomRange[1] - zoomRange[0];
       if (priceDiff < range * 0.01) {
-        return null; // Don't render this tick
+        return <g />;
       }
     }
     
@@ -461,7 +461,6 @@ export default function DeltaVisualization({ optionsChain, deltaData }: DeltaVis
                   fill: '#3b82f6',
                   fontSize: 12,
                   fontWeight: 'bold',
-                  background: { fill: 'white', stroke: '#3b82f6', strokeWidth: 1, padding: 3, radius: 3 }
                 }}
                 ifOverflow="visible"
               />
@@ -512,7 +511,6 @@ export default function DeltaVisualization({ optionsChain, deltaData }: DeltaVis
                     fontSize: 13,
                     fontWeight: 'bold',
                     offset: isClose && optionsChain.spotPrice > 0 ? 15 : 10,
-                    background: { fill: 'white', stroke: '#a855f7', strokeWidth: 1, padding: 4, radius: 4 }
                   }}
                 />
               );

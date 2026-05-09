@@ -1,0 +1,481 @@
+import type { BlockstreamTxRef } from '@/lib/solana-bot/bitcoin-blockstream';
+import {
+  collectInputSourceAddresses,
+  fetchAddressTxs,
+  fetchTx,
+  primaryInputSourceAddress,
+  sumToAddresses,
+  sumToAddress,
+} from '@/lib/solana-bot/bitcoin-blockstream';
+import { arkhamTxHash, fetchArkhamBitcoinTransfersForBase } from '@/lib/solana-bot/arkham-transfers';
+import {
+  getArkhamApiKey,
+  getArkhamTimeLast,
+  getArkhamTransferBase,
+  getArkhamTransferLimit,
+  getIbitCoinbaseAddressTxLimit,
+  getIbitCoinbaseDestinationAddresses,
+  getIbitDetectEndMinEt,
+  getIbitDetectStartMinEt,
+  getIbitExtraTxids,
+  getIbitMainDepositAddress,
+  getIbitMainOutMaxBtc,
+  getIbitMainOutMinBtc,
+  getIbitMinSats,
+  getIbitWatchSourceAddresses,
+  isArkhamIbitPollEnabled,
+  isIbitAllowHistoricalBlockDay,
+  getIbitSignalMaxAgeSec,
+  isIbitPollSourceWatchAddresses,
+  isIbitStrictFiltersEnabled,
+} from '@/lib/solana-bot/ibit-config';
+import {
+  getCoverScheduleUtc,
+  getEtDayKey,
+  getEtDayStartUnix,
+  getEtMinutesFromMidnight,
+  IBIT_TZ,
+  isBlkLongBuyAllowedForBlockTimeEt,
+  isBlockTimeInEtMinuteWindow,
+  isWithinArkhamPollWindowEt,
+  isWithinSignalWindowEt,
+} from '@/lib/solana-bot/ibit-schedule';
+import {
+  getBlkServerProcessedTxids,
+  getBlkServerTradedLongEtDayKeys,
+  getBlkServerTradedShortEtDayKeys,
+} from '@/lib/solana-bot/blk-processed-txids-store';
+import type { IbitBatchGroup, IbitTransferSignal } from '@/lib/solana-bot/ibit-types';
+import { processArkhamBatchSignals } from '@/lib/solana-bot/ibit-arkham-batch';
+import {
+  isArkhamBatchModeEnabled,
+  isIbitArkhamPollScheduleEnabled,
+  isIbitCoinbasePollEnabled,
+} from '@/lib/solana-bot/ibit-config';
+
+export type { IbitTransferSignal, IbitBatchGroup } from '@/lib/solana-bot/ibit-types';
+
+/**
+ * Require tx block time to fall on **today's** ET calendar day so a 06:53 ET transfer from
+ * months ago does not match every day (time-of-day alone is not enough).
+ */
+function blockTimeIsOnCurrentEtCalendarDay(blockTimeSec: number): boolean {
+  const txDayStart = getEtDayStartUnix(new Date(blockTimeSec * 1000));
+  const todayStart = getEtDayStartUnix(new Date());
+  return txDayStart === todayStart;
+}
+
+/** Transfer must be recent (chain time), not just "today" — avoids replay after refresh on stale txs. */
+function blockTimeWithinMaxSignalAge(blockTimeSec: number): boolean {
+  if (isIbitAllowHistoricalBlockDay()) return true;
+  const maxAge = getIbitSignalMaxAgeSec();
+  if (maxAge <= 0) return true;
+  const now = Math.floor(Date.now() / 1000);
+  return blockTimeSec >= now - maxAge;
+}
+
+function blockTimePassesFilter(blockTimeSec: number): boolean {
+  if (blockTimeSec <= 0) return false;
+  if (!blockTimeWithinMaxSignalAge(blockTimeSec)) return false;
+  const sameEtDayOk =
+    isIbitAllowHistoricalBlockDay() || blockTimeIsOnCurrentEtCalendarDay(blockTimeSec);
+  if (isIbitStrictFiltersEnabled()) {
+    const inBatchWindow = isBlockTimeInEtMinuteWindow(
+      blockTimeSec,
+      getIbitDetectStartMinEt(),
+      getIbitDetectEndMinEt()
+    );
+    /** Daytime (≥10:00 ET): afternoon cover schedule; still require main-output band elsewhere. */
+    const m = getEtMinutesFromMidnight(new Date(blockTimeSec * 1000));
+    const daytimeAfter10 = m >= 10 * 60;
+    return sameEtDayOk && (inBatchWindow || daytimeAfter10);
+  }
+  const d = new Date(blockTimeSec * 1000);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: IBIT_TZ,
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+  const minutes = hour * 60 + minute;
+  return sameEtDayOk && minutes >= 2 * 60 && minutes < 9 * 60 + 30;
+}
+
+function mainOutputPassesStrictBand(mainOutSats: number): boolean {
+  const minSats = Math.floor(getIbitMainOutMinBtc() * 1e8);
+  if (mainOutSats < minSats) return false;
+  const maxBtc = getIbitMainOutMaxBtc();
+  if (maxBtc == null) return true;
+  const maxSats = Math.ceil(maxBtc * 1e8);
+  return mainOutSats <= maxSats;
+}
+
+function nowInActiveDetectWindow(): boolean {
+  const now = new Date();
+  if (isIbitStrictFiltersEnabled()) {
+    const m = getEtMinutesFromMidnight(now);
+    return m >= getIbitDetectStartMinEt() && m < getIbitDetectEndMinEt();
+  }
+  return isWithinSignalWindowEt(now);
+}
+
+export async function pollIbitTransfers(): Promise<{
+  configured: boolean;
+  watchAddresses: string[];
+  coinbaseAddresses: string[];
+  /**
+   * `false` when `IBIT_DISABLE_COINBASE_POLL=1` — only the Blockstream *address list* poll for
+   * Coinbase deposit discovery is off. Arkham (batch or legacy) still runs.
+   */
+  coinbaseBlockstreamPoll: boolean;
+  /** Broad 02:00–09:30 ET (legacy UI) */
+  inLegacySignalWindow: boolean;
+  /** Current time in active detection window (strict or legacy per config) */
+  inDetectWindow: boolean;
+  /** True when also polling legacy source watch addresses (env IBIT_POLL_SOURCE_WATCH=1) */
+  pollSourceWatchAddresses: boolean;
+  /** Arkham Intel: outgoing BTC for `base` → tx hashes → Blockstream validate */
+  arkham?: {
+    configured: boolean;
+    transferBase: string;
+    timeLast: string;
+    error?: string;
+    /** Present when API was not called (weekly ET window: Sun 00:00 – Fri before 16:00). */
+    pollSkippedReason?: string;
+  };
+  detection: {
+    strictFilters: boolean;
+    mainDepositAddress: string;
+    detectStartMinEt: number;
+    detectEndMinEt: number;
+    mainOutMinBtc: number;
+    /** null = no upper cap */
+    mainOutMaxBtc: number | null;
+    coinbaseTxLimit: number;
+    /** Block time must be within this many seconds of now (0 = disabled). */
+    signalMaxAgeSec: number;
+  };
+  signals: IbitTransferSignal[];
+  /** Same block_time → batch (multiple sends at once) */
+  batchGroups: IbitBatchGroup[];
+  error?: string;
+}> {
+  const watchAddresses = getIbitWatchSourceAddresses();
+  const watchSet = new Set(watchAddresses);
+  const coinbaseAddresses = getIbitCoinbaseDestinationAddresses();
+  const minSats = getIbitMinSats();
+  const destSet = new Set(coinbaseAddresses);
+  const mainDeposit = getIbitMainDepositAddress();
+  const strict = isIbitStrictFiltersEnabled();
+  const pollWatch = isIbitPollSourceWatchAddresses();
+  const coinbaseTxLimit = getIbitCoinbaseAddressTxLimit();
+  const nowPoll = new Date();
+  const allowArkhamHttp =
+    !isIbitArkhamPollScheduleEnabled() || isWithinArkhamPollWindowEt(nowPoll);
+  const coinbaseBlockstreamPoll = isIbitCoinbasePollEnabled();
+
+  if (coinbaseAddresses.length === 0) {
+    const key = getArkhamApiKey();
+    return {
+      configured: false,
+      watchAddresses,
+      coinbaseAddresses,
+      coinbaseBlockstreamPoll,
+      inLegacySignalWindow: isWithinSignalWindowEt(),
+      inDetectWindow: nowInActiveDetectWindow(),
+      pollSourceWatchAddresses: pollWatch,
+      arkham: {
+        configured: !!key,
+        transferBase: getArkhamTransferBase(),
+        timeLast: getArkhamTimeLast(),
+        ...(key && isIbitArkhamPollScheduleEnabled() && !allowArkhamHttp
+          ? { pollSkippedReason: 'outside_sun_midnight_fri_4pm_et' as const }
+          : {}),
+      },
+      detection: {
+        strictFilters: strict,
+        mainDepositAddress: mainDeposit,
+        detectStartMinEt: getIbitDetectStartMinEt(),
+        detectEndMinEt: getIbitDetectEndMinEt(),
+        mainOutMinBtc: getIbitMainOutMinBtc(),
+        mainOutMaxBtc: getIbitMainOutMaxBtc(),
+        coinbaseTxLimit,
+        signalMaxAgeSec: getIbitSignalMaxAgeSec(),
+      },
+      signals: [],
+      batchGroups: [],
+    };
+  }
+
+  const signals: IbitTransferSignal[] = [];
+  const seen = new Set<string>();
+
+  const buildSignal = (
+    tx: BlockstreamTxRef,
+    signalSource: IbitTransferSignal['signalSource'],
+    arkhamEntityBase?: string
+  ): IbitTransferSignal | null => {
+    if (seen.has(tx.txid)) return null;
+    const { sats, destinations } = sumToAddresses(tx, destSet);
+    if (sats < minSats) return null;
+
+    const mainOutSats = sumToAddress(tx, mainDeposit);
+    const mainOutBtc = mainOutSats / 1e8;
+
+    const blockTime = tx.status?.block_time ?? 0;
+    const mode: 'strict' | 'legacy' = strict ? 'strict' : 'legacy';
+
+    if (strict) {
+      if (blockTime <= 0 || !blockTimePassesFilter(blockTime)) return null;
+      if (!mainOutputPassesStrictBand(mainOutSats)) return null;
+    } else {
+      if (blockTime > 0 && !blockTimePassesFilter(blockTime)) return null;
+    }
+
+    seen.add(tx.txid);
+    const anchor = blockTime > 0 ? new Date(blockTime * 1000) : new Date();
+    const coverScheduleUtc = getCoverScheduleUtc(anchor).map((d) => d.toISOString());
+
+    const inputSourceAddresses = collectInputSourceAddresses(tx);
+    const primary = primaryInputSourceAddress(tx);
+    const watchListMatch = inputSourceAddresses.some((a) => watchSet.has(a));
+    const sourceAddress =
+      primary ??
+      inputSourceAddresses[0] ??
+      (signalSource === 'extra_txid' ? 'extra-txid' : signalSource === 'arkham' ? 'arkham' : 'unknown');
+
+    const out: IbitTransferSignal = {
+      txid: tx.txid,
+      blockTime,
+      sourceAddress,
+      inputSourceAddresses,
+      watchListMatch,
+      signalSource,
+      sats,
+      mainOutSats,
+      mainOutBtc,
+      matchedDestinations: Array.from(new Set(destinations)),
+      coverScheduleUtc,
+      detectionMode: mode,
+    };
+    if (arkhamEntityBase) out.arkhamEntityBase = arkhamEntityBase;
+    return out;
+  };
+
+  const processTx = (
+    tx: BlockstreamTxRef,
+    signalSource: IbitTransferSignal['signalSource'],
+    arkhamEntityBase?: string
+  ): void => {
+    const sig = buildSignal(tx, signalSource, arkhamEntityBase);
+    if (sig) signals.push(sig);
+  };
+
+  /** 1) Manual / Arkham txids */
+  for (const extraTxid of getIbitExtraTxids()) {
+    try {
+      const tx = await fetchTx(extraTxid);
+      if (tx) processTx(tx, 'extra_txid');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let arkhamMeta: {
+    configured: boolean;
+    transferBase: string;
+    timeLast: string;
+    error?: string;
+    pollSkippedReason?: string;
+  } = {
+    configured: false,
+    transferBase: getArkhamTransferBase(),
+    timeLast: getArkhamTimeLast(),
+  };
+
+  const arkhamKey = getArkhamApiKey();
+
+  /** 1b) Arkham: batch mode (2nd ~300 BTC) or legacy per-tx validation */
+  if (isArkhamBatchModeEnabled() && arkhamKey && isArkhamIbitPollEnabled()) {
+    arkhamMeta.configured = true;
+    arkhamMeta.transferBase = getArkhamTransferBase();
+    arkhamMeta.timeLast = getArkhamTimeLast();
+    if (!allowArkhamHttp) {
+      arkhamMeta.pollSkippedReason = 'outside_sun_midnight_fri_4pm_et';
+    } else {
+      const batch = await processArkhamBatchSignals();
+      if (batch.error) arkhamMeta.error = batch.error;
+      for (const s of batch.signals) {
+        if (!seen.has(s.txid)) {
+          seen.add(s.txid);
+          signals.push(s);
+        }
+      }
+    }
+  } else if (isArkhamIbitPollEnabled() && arkhamKey) {
+    arkhamMeta.configured = true;
+    const transferBase = getArkhamTransferBase();
+    arkhamMeta.transferBase = transferBase;
+    arkhamMeta.timeLast = getArkhamTimeLast();
+    if (!allowArkhamHttp) {
+      arkhamMeta.pollSkippedReason = 'outside_sun_midnight_fri_4pm_et';
+    } else {
+      const { transfers, error: arkErr } = await fetchArkhamBitcoinTransfersForBase({
+        apiKey: arkhamKey,
+        transferBase,
+        limit: getArkhamTransferLimit(),
+        timeLast: getArkhamTimeLast(),
+      });
+      if (arkErr) arkhamMeta.error = arkErr;
+      const seenArkhamHashes = new Set<string>();
+      for (const at of transfers) {
+        const h = arkhamTxHash(at);
+        if (!h || seenArkhamHashes.has(h)) continue;
+        seenArkhamHashes.add(h);
+        try {
+          const tx = await fetchTx(h);
+          if (tx) processTx(tx, 'arkham', transferBase);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  /** 2) Coinbase deposit addresses — large BTC in to main deposit → signal */
+  if (isIbitCoinbasePollEnabled()) {
+    for (const addr of coinbaseAddresses) {
+      let txs: BlockstreamTxRef[];
+      try {
+        txs = await fetchAddressTxs(addr, coinbaseTxLimit);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          configured: true,
+          watchAddresses,
+          coinbaseAddresses,
+          coinbaseBlockstreamPoll,
+          inLegacySignalWindow: isWithinSignalWindowEt(),
+          inDetectWindow: nowInActiveDetectWindow(),
+          pollSourceWatchAddresses: pollWatch,
+          detection: {
+            strictFilters: strict,
+            mainDepositAddress: mainDeposit,
+            detectStartMinEt: getIbitDetectStartMinEt(),
+            detectEndMinEt: getIbitDetectEndMinEt(),
+            mainOutMinBtc: getIbitMainOutMinBtc(),
+            mainOutMaxBtc: getIbitMainOutMaxBtc(),
+            coinbaseTxLimit,
+            signalMaxAgeSec: getIbitSignalMaxAgeSec(),
+          },
+          signals: [],
+          batchGroups: [],
+          error: msg,
+        };
+      }
+
+      for (const tx of txs) {
+        processTx(tx, 'coinbase_deposit');
+      }
+    }
+  }
+
+  /** 3) Optional: legacy path — txs spending from known custodian addresses */
+  if (pollWatch) {
+    for (const addr of watchAddresses) {
+      let txs: BlockstreamTxRef[];
+      try {
+        txs = await fetchAddressTxs(addr, 30);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          configured: true,
+          watchAddresses,
+          coinbaseAddresses,
+          coinbaseBlockstreamPoll,
+          inLegacySignalWindow: isWithinSignalWindowEt(),
+          inDetectWindow: nowInActiveDetectWindow(),
+          pollSourceWatchAddresses: pollWatch,
+          detection: {
+            strictFilters: strict,
+            mainDepositAddress: mainDeposit,
+            detectStartMinEt: getIbitDetectStartMinEt(),
+            detectEndMinEt: getIbitDetectEndMinEt(),
+            mainOutMinBtc: getIbitMainOutMinBtc(),
+            mainOutMaxBtc: getIbitMainOutMaxBtc(),
+            coinbaseTxLimit,
+            signalMaxAgeSec: getIbitSignalMaxAgeSec(),
+          },
+          signals: [],
+          batchGroups: [],
+          error: msg,
+        };
+      }
+
+      for (const tx of txs) {
+        processTx(tx, 'source_watch');
+      }
+    }
+  }
+
+  signals.sort((a, b) => b.blockTime - a.blockTime);
+
+  /** Do not re-emit txids the server already recorded as processed (survives refresh). */
+  const serverSeen = getBlkServerProcessedTxids();
+  const tradedShortDays = getBlkServerTradedShortEtDayKeys();
+  const tradedLongDays = getBlkServerTradedLongEtDayKeys();
+  const filteredSignals = signals.filter((s) => {
+    if (serverSeen.has(s.txid.toLowerCase())) return false;
+    if (
+      (s.blkArkhamBatchRole === 'second_in_long' || s.blkArkhamBatchRole === 'second_striker_in_long') &&
+      !isBlkLongBuyAllowedForBlockTimeEt(s.blockTime)
+    ) {
+      return false;
+    }
+    if (s.blockTime > 0) {
+      const dk = getEtDayKey(new Date(s.blockTime * 1000));
+      if (s.blkArkhamBatchRole === 'second_in_long' || s.blkArkhamBatchRole === 'second_striker_in_long') {
+        if (tradedLongDays.has(dk)) return false;
+      } else {
+        if (tradedShortDays.has(dk)) return false;
+      }
+    }
+    return true;
+  });
+
+  const byBlock = new Map<number, string[]>();
+  for (const s of filteredSignals) {
+    if (s.blockTime <= 0) continue;
+    const list = byBlock.get(s.blockTime) ?? [];
+    list.push(s.txid);
+    byBlock.set(s.blockTime, list);
+  }
+  const batchGroups: IbitBatchGroup[] = Array.from(byBlock.entries())
+    .sort((a, b) => b[0] - a[0])
+    .map(([blockTime, txids]) => ({ blockTime, txids }));
+
+  return {
+    configured: true,
+    watchAddresses,
+    coinbaseAddresses,
+    coinbaseBlockstreamPoll,
+    inLegacySignalWindow: isWithinSignalWindowEt(),
+    inDetectWindow: nowInActiveDetectWindow(),
+    pollSourceWatchAddresses: pollWatch,
+    arkham: arkhamMeta,
+    detection: {
+      strictFilters: strict,
+      mainDepositAddress: mainDeposit,
+      detectStartMinEt: getIbitDetectStartMinEt(),
+      detectEndMinEt: getIbitDetectEndMinEt(),
+      mainOutMinBtc: getIbitMainOutMinBtc(),
+      mainOutMaxBtc: getIbitMainOutMaxBtc(),
+      coinbaseTxLimit,
+      signalMaxAgeSec: getIbitSignalMaxAgeSec(),
+    },
+    signals: filteredSignals,
+    batchGroups,
+  };
+}
