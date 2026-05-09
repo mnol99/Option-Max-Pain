@@ -278,6 +278,13 @@ export default function HyperliquidPage() {
                 notional; margin must cover both in cross — reduce size or use isolated in HL UI if
                 needed).
               </p>
+              <p className="text-xs text-slate-600 mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+                <strong>Replace vs stack:</strong>{' '}
+                {d.envHourlyCancelPriorBands === true
+                  ? '(env) Cancels existing open limits on this coin before each new hourly pair.'
+                  : '(env) Unfilled hourly limits stay on book; new pairs add beside them. To force cancel-each-hour instead, set HL_HOURLY_CANCEL_PRIOR_BANDS=1 in .env.local and restart Next.'}{' '}
+                This is server-only (.env); not editable here.
+              </p>
               <div className="flex flex-wrap gap-2 mt-3">
                 <button
                   type="button"
