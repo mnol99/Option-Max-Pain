@@ -52,6 +52,12 @@ export default function HyperliquidPage() {
     afterMinute: 1,
     enabled: false,
   });
+  const [cancelingOid, setCancelingOid] = useState<number | null>(null);
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [manualSide, setManualSide] = useState<'buy' | 'sell'>('buy');
+  const [manualLimitPx, setManualLimitPx] = useState('');
+  const [manualSzCoin, setManualSzCoin] = useState('');
+  const [manualReduceOnly, setManualReduceOnly] = useState(false);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -150,6 +156,73 @@ export default function HyperliquidPage() {
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Tick failed');
+    }
+  };
+
+  const cancelOne = async (coin: string, oid: number) => {
+    setCancelingOid(oid);
+    setErr(null);
+    try {
+      const res = await fetch('/api/hyperliquid/cancel-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coin, oid }),
+      });
+      const j = await parseApiJson<{ success?: boolean; error?: string }>(res);
+      if (!j.success) {
+        setErr(j.error || 'Cancel failed');
+        return;
+      }
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Cancel failed');
+    } finally {
+      setCancelingOid(null);
+    }
+  };
+
+  const placeManualLimit = async () => {
+    const coin = form.coin.trim().toUpperCase();
+    const px = Number(manualLimitPx);
+    const sz = Number(manualSzCoin);
+    if (!coin) {
+      setErr('Set Symbol (perp) above');
+      return;
+    }
+    if (!Number.isFinite(px) || px <= 0) {
+      setErr('Enter a valid limit price');
+      return;
+    }
+    if (!Number.isFinite(sz) || sz <= 0) {
+      setErr('Enter size in coin (e.g. SOL amount)');
+      return;
+    }
+    setManualSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch('/api/hyperliquid/limit-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coin,
+          side: manualSide,
+          limitPx: px,
+          szCoin: sz,
+          reduceOnly: manualReduceOnly,
+        }),
+      });
+      const j = await parseApiJson<{ success?: boolean; error?: string }>(res);
+      if (!j.success) {
+        setErr(j.error || 'Order failed');
+        return;
+      }
+      setManualLimitPx('');
+      setManualSzCoin('');
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Order failed');
+    } finally {
+      setManualSubmitting(false);
     }
   };
 
@@ -324,21 +397,104 @@ export default function HyperliquidPage() {
                       <th>Price</th>
                       <th>Size</th>
                       <th>oid</th>
+                      <th className="w-24"> </th>
                     </tr>
                   </thead>
                   <tbody>
                     {d.openOrders.map((o) => (
-                      <tr key={o.oid} className="border-t border-slate-100">
+                      <tr key={`${o.coin}-${o.oid}`} className="border-t border-slate-100">
                         <td className="py-1 font-mono">{o.coin}</td>
-                        <td>{o.side}</td>
+                        <td>{o.side === 'A' ? 'Sell' : o.side === 'B' ? 'Buy' : o.side}</td>
                         <td className="font-mono">{o.limitPx}</td>
                         <td className="font-mono">{o.sz}</td>
                         <td className="font-mono">{o.oid}</td>
+                        <td className="py-1">
+                          <button
+                            type="button"
+                            onClick={() => void cancelOne(o.coin, o.oid)}
+                            disabled={cancelingOid === o.oid}
+                            className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-800 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {cancelingOid === o.oid ? 'Cancel…' : 'Cancel'}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
+            </div>
+
+            <div className="p-4 bg-white border border-slate-200 rounded-lg shadow-sm">
+              <h2 className="font-semibold text-slate-800 mb-2">Manual limit order (GTC)</h2>
+              <p className="text-xs text-slate-600 mb-3">
+                Uses <strong>Symbol (perp)</strong> from Parameters above. Perps are quoted vs USDC;{' '}
+                <strong>Size</strong> is <strong>base coin amount</strong> (e.g. SOL qty), not USD. Optional{' '}
+                <strong>Reduce-only</strong> only decreases an existing position.
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3 text-sm max-w-xl">
+                <label className="flex flex-wrap gap-3 items-center sm:col-span-2">
+                  <span className="text-slate-600">Side</span>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="manSide"
+                      checked={manualSide === 'buy'}
+                      onChange={() => setManualSide('buy')}
+                    />
+                    Buy
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="manSide"
+                      checked={manualSide === 'sell'}
+                      onChange={() => setManualSide('sell')}
+                    />
+                    Sell
+                  </label>
+                </label>
+                <label className="block">
+                  <span className="text-slate-600">Limit price (USDC)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    className="mt-1 w-full border border-slate-300 rounded px-2 py-1"
+                    value={manualLimitPx}
+                    onChange={(e) => setManualLimitPx(e.target.value)}
+                    placeholder="e.g. 140.5"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-slate-600">Size (coin qty)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    className="mt-1 w-full border border-slate-300 rounded px-2 py-1"
+                    value={manualSzCoin}
+                    onChange={(e) => setManualSzCoin(e.target.value)}
+                    placeholder="e.g. 0.35"
+                  />
+                </label>
+                <label className="sm:col-span-2 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={manualReduceOnly}
+                    onChange={(e) => setManualReduceOnly(e.target.checked)}
+                  />
+                  <span className="text-slate-700">Reduce-only</span>
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => void placeManualLimit()}
+                disabled={manualSubmitting}
+                className="mt-3 px-4 py-1.5 bg-emerald-700 text-white rounded text-sm disabled:opacity-50"
+              >
+                {manualSubmitting ? 'Placing…' : 'Place limit order'}
+              </button>
             </div>
 
             <div className="p-4 bg-white border border-slate-200 rounded-lg shadow-sm">
